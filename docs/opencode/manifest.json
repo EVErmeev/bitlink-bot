@@ -7,11 +7,11 @@
   "active_task_id": "TASK-2026-08-01-704e99b",
   "active_task_file": "docs/opencode/tasks/TASK-2026-08-01-704e99b.md",
   "base_commit": "2644b52dee92f7f6d2709496335f90364c47057f",
-  "head_commit": "91fd494743470f9cb403ff85b7efecc63c0a01f0",
+  "head_commit": "523747a7cb6b8d5c2ad42ff3c5c9beaab2c5b8e3",
   "working_branch": "fix/audit-e7cc95f",
-  "pull_request_url": null,
-  "status": "in_progress",
-  "validation_state": "implementing_fixes",
+  "pull_request_url": "https://github.com/EVErmeev/bitlink-bot/pull/1",
+  "status": "awaiting_independent_validation",
+  "validation_state": "awaiting_review",
   "required_checks": [
     "python -m compileall .",
     "pytest -q",
@@ -225,6 +225,7 @@
     "requirements.txt"
   ],
   "remaining_blockers": [
+    "BB-CRIT-001: real adapters not implemented (API contracts unconfirmed)",
     "BB-MAJ-011: ETA history not persisted",
     "BB-MAJ-012: BIT.Link recording date not used",
     "BB-MAJ-013: default template settings ignored",
@@ -236,6 +237,6 @@
     "BB-MAJ-019: real Confluence publish not implemented",
     "BB-MAJ-020: queue stop is incomplete"
   ],
-  "next_action": "fix BB-MAJ-011..020: major issues (ETA, dates, settings, HTML escaping, tests, watch, batch report, Telegram, Confluence, queue stop)",
-  "updated_at": "2026-08-01T19:40:00Z"
+  "next_action": "Await independent validation of Draft PR #1. Do NOT merge or mark accepted.",
+  "updated_at": "2026-08-01T20:30:00Z"
 }
