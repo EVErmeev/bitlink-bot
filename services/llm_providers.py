@@ -20,6 +20,19 @@ class ConnectionCheckResult:
     response_content_type: str | None = None
 
 
+class OneBitProviderError(RuntimeError):
+    def __init__(self, stage="", code="", safe_message="", exit_code=None,
+                 response_type=None, safe_stdout="", safe_stderr=""):
+        self.stage = stage
+        self.code = code
+        self.safe_message = safe_message
+        self.exit_code = exit_code
+        self.response_type = response_type
+        self.safe_stdout = safe_stdout
+        self.safe_stderr = safe_stderr
+        super().__init__(safe_message)
+
+
 class LLMProvider(Protocol):
     def check_connection(self) -> ConnectionCheckResult: ...
     def generate(self, system_prompt: str, user_prompt: str, *, model: str,
@@ -137,8 +150,13 @@ class OneBitNewtonCLIProvider:
             return ConnectionCheckResult(ok=False, stage="cli_error", safe_message=str(e)[:200])
 
     def generate(self, system_prompt, user_prompt, *, model="", temperature=0.1, max_tokens=4096):
+        import json as json_mod
         import os as _os
         import re as re_mod
+
+        if not self.token:
+            raise OneBitProviderError(stage="provider_config", code="ONEBIT_TOKEN_MISSING",
+                safe_message="Токен БИТ Ньютон не указан. Укажите токен в настройках LLM.")
 
         mdl = model if model in ("llama", "gpt4") else self.model
         fd, output_path = tempfile.mkstemp(suffix=".json", prefix="newton_out_")
@@ -151,30 +169,48 @@ class OneBitNewtonCLIProvider:
                 args += ["--system-prompt", system_prompt]
 
             env = _os.environ.copy()
-            if self.token:
-                env["NEWTON_TOKEN"] = self.token
+            env["NEWTON_TOKEN"] = self.token
 
             result = subprocess.run(args, input=user_prompt, capture_output=True,
                                    text=True, shell=False, timeout=self.timeout_seconds,
                                    env=env, encoding="utf-8")
+
             if result.returncode != 0:
-                raise RuntimeError(f"Newton CLI exit {result.returncode}: {result.stderr[:300]}")
+                raise OneBitProviderError(stage="cli_execution", code="CLI_NONZERO_EXIT",
+                    safe_message=f"Newton CLI завершился с кодом {result.returncode}",
+                    exit_code=result.returncode, safe_stderr=result.stderr[:300])
+
+            if not _os.path.exists(output_path):
+                raise OneBitProviderError(stage="output_check", code="OUTPUT_FILE_MISSING",
+                    safe_message="CLI не создал выходной файл. Проверьте токен и права.")
+
+            file_size = _os.path.getsize(output_path)
+            if file_size == 0:
+                raise OneBitProviderError(stage="output_check", code="OUTPUT_FILE_EMPTY",
+                    safe_message="CLI создал пустой выходной файл. Проверьте токен и модель.")
 
             with open(output_path, encoding="utf-8") as f:
                 output = f.read().strip()
+
             if not output:
-                raise RuntimeError("Newton CLI produced empty output")
+                raise OneBitProviderError(stage="output_read", code="EMPTY_RESPONSE",
+                    safe_message="Ответ CLI пуст.", response_type="empty")
 
             fences = re_mod.findall(r'```(?:json)?\s*\n?(.*?)```', output, re_mod.DOTALL)
             if len(fences) == 1:
-                return fences[0].strip()
-            if len(fences) > 1:
-                raise RuntimeError(f"Newton CLI returned {len(fences)} JSON blocks — expected single valid JSON object.")
+                output = fences[0].strip()
+            elif len(fences) > 1:
+                raise OneBitProviderError(stage="json_extract", code="MULTIPLE_JSON_BLOCKS",
+                    safe_message=f"Ответ содержит {len(fences)} JSON-блоков. Ожидается один.",
+                    response_type="multi_block")
 
-            stripped = output.strip()
-            if stripped.startswith("{"):
-                return stripped
-            raise RuntimeError(f"Output is not valid JSON: {stripped[:300]}")
+            try:
+                json_mod.loads(output)
+            except json_mod.JSONDecodeError as e:
+                raise OneBitProviderError(stage="json_parse", code="JSON_PARSE_ERROR",
+                    safe_message=f"Ответ не является валидным JSON: {e}", response_type="invalid_json")
+
+            return output
         finally:
             try:
                 _os.unlink(output_path)

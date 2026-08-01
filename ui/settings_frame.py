@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+import subprocess
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -89,8 +90,8 @@ class SettingsFrame(ttk.Frame):
         entries = {}
         for i, (key, label, mask) in enumerate(fields):
             ttk.Label(frame, text=label).grid(row=i, column=0, sticky=tk.W, pady=2)
-            show = "*" if mask else ""
-            entry = ttk.Entry(frame, width=50, show=show)
+            show_value = "*" if mask else ""
+            entry = ttk.Entry(frame, width=50, show=show_value)
             entry.grid(row=i, column=1, sticky=tk.W, padx=5, pady=2)
             entries[key] = entry
 
@@ -123,6 +124,8 @@ class SettingsFrame(ttk.Frame):
             row=2, column=0, columnspan=2, sticky=tk.W, pady=2
         )
 
+    # ── LLM block with three separate sub-panels ──
+
     def _build_llm_block(self):
         frame = ttk.LabelFrame(self.scrollable, text="Нейросеть / LLM", padding=10)
         frame.pack(fill=tk.X, padx=10, pady=5)
@@ -134,98 +137,152 @@ class SettingsFrame(ttk.Frame):
         provider_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         provider_combo.bind("<<ComboboxSelected>>", self._on_llm_provider_change)
 
-        # ── Newton CLI fields (row 1-4) ──
-        ttk.Label(frame, text="Путь CLI:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self._llm_cli_path_entry = ttk.Entry(frame, width=50)
-        self._llm_cli_path_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        # Status label shared across panels, below the provider row
+        ttk.Label(frame, text="Статус:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self._llm_status_label = ttk.Label(frame, text="Не проверено", foreground="gray")
+        self._llm_status_label.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
 
-        ttk.Label(frame, text="Модель:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self._llm_cli_model_var = tk.StringVar(value="gpt4")
-        model_combo = ttk.Combobox(frame, textvariable=self._llm_cli_model_var, state="readonly", width=15)
+        # ── OneBit Newton CLI panel ──
+        self._onebit_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
+        self._onebit_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
+        self._onebit_panel.grid_remove()
+        self._build_onebit_panel()
+
+        # ── OpenAI compatible panel ──
+        self._openai_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
+        self._openai_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
+        self._openai_panel.grid_remove()
+        self._build_openai_panel()
+
+        # ── Mock panel ──
+        self._mock_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
+        self._mock_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
+        self._mock_panel.grid_remove()
+        self._build_mock_panel()
+
+        self._show_provider_panel("onebit_newton_cli")
+
+    def _build_onebit_panel(self):
+        p = self._onebit_panel
+
+        # Row 0: token
+        ttk.Label(p, text="Токен БИТ Ньютон:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self._llm_onebit_token_entry = ttk.Entry(p, width=50, show="*")
+        self._llm_onebit_token_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+
+        self._llm_onebit_show_token_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(p, text="Показать", variable=self._llm_onebit_show_token_var,
+                        command=self._toggle_onebit_token_visibility).grid(
+            row=0, column=2, sticky=tk.W, padx=5)
+
+        # Row 1: CLI path
+        ttk.Label(p, text="Путь CLI:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self._llm_onebit_cli_path_entry = ttk.Entry(p, width=50)
+        self._llm_onebit_cli_path_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # Row 2: model
+        ttk.Label(p, text="Модель:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self._llm_onebit_model_var = tk.StringVar(value="gpt4")
+        model_combo = ttk.Combobox(p, textvariable=self._llm_onebit_model_var, state="readonly", width=15)
         model_combo["values"] = ["llama", "gpt4"]
         model_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
-        ttk.Label(frame, text="Таймаут (сек):").grid(row=3, column=0, sticky=tk.W, pady=2)
-        self._llm_cli_timeout_entry = ttk.Entry(frame, width=10)
-        self._llm_cli_timeout_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        # Row 3: timeout
+        ttk.Label(p, text="Таймаут (сек):").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self._llm_onebit_timeout_entry = ttk.Entry(p, width=10)
+        self._llm_onebit_timeout_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
 
-        self._llm_cli_btn_frame = ttk.Frame(frame)
-        self._llm_cli_btn_frame.grid(row=4, column=0, columnspan=3, pady=5, sticky=tk.W)
-        ttk.Button(self._llm_cli_btn_frame, text="Обнаружить CLI", command=self._discover_cli).pack(side=tk.LEFT, padx=3)
-        ttk.Button(self._llm_cli_btn_frame, text="Проверить CLI", command=self._check_cli).pack(side=tk.LEFT, padx=3)
+        # Row 4: buttons
+        btn_frame = ttk.Frame(p)
+        btn_frame.grid(row=4, column=0, columnspan=3, pady=5, sticky=tk.W)
+        ttk.Button(btn_frame, text="Обнаружить CLI", command=self._discover_cli).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="Проверить версию", command=self._check_cli_version).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="Проверить health", command=self._check_cli_health).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="Проверить токен и LLM", command=self._check_cli_token_and_llm).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="Копировать диагностику", command=self._copy_diagnostics).pack(side=tk.LEFT, padx=3)
 
-        # ── OpenAI fields (row 5-8) ──
-        ttk.Label(frame, text="Base URL:").grid(row=5, column=0, sticky=tk.W, pady=2)
-        self._llm_url_entry = ttk.Entry(frame, width=50)
-        self._llm_url_entry.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
+    def _build_openai_panel(self):
+        p = self._openai_panel
 
-        ttk.Label(frame, text="API Key:").grid(row=6, column=0, sticky=tk.W, pady=2)
-        self._llm_key_entry = ttk.Entry(frame, width=50, show="*")
-        self._llm_key_entry.grid(row=6, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(p, text="Base URL:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self._llm_openai_url_entry = ttk.Entry(p, width=50)
+        self._llm_openai_url_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
 
-        self._llm_show_key_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(frame, text="Показать API Key", variable=self._llm_show_key_var,
-                        command=self._toggle_llm_key_visibility).grid(row=6, column=2, sticky=tk.W, padx=5)
+        ttk.Label(p, text="API Key:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self._llm_openai_key_entry = ttk.Entry(p, width=50, show="*")
+        self._llm_openai_key_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
 
-        ttk.Label(frame, text="Model:").grid(row=7, column=0, sticky=tk.W, pady=2)
-        self._llm_model_entry = ttk.Entry(frame, width=50)
-        self._llm_model_entry.grid(row=7, column=1, sticky=tk.W, padx=5, pady=2)
+        self._llm_openai_show_key_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(p, text="Показать API Key", variable=self._llm_openai_show_key_var,
+                        command=self._toggle_openai_key_visibility).grid(
+            row=1, column=2, sticky=tk.W, padx=5)
 
-        # ── Status + button (row 8-9) ──
-        ttk.Label(frame, text="Статус:").grid(row=8, column=0, sticky=tk.W, pady=2)
-        self._llm_status_label = ttk.Label(frame, text="Не проверено", foreground="gray")
-        self._llm_status_label.grid(row=8, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(p, text="Model:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self._llm_openai_model_entry = ttk.Entry(p, width=50)
+        self._llm_openai_model_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
-        btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=9, column=0, columnspan=3, pady=5, sticky=tk.W)
-        ttk.Button(btn_frame, text="Проверить LLM", command=self._test_llm).pack(side=tk.LEFT, padx=3)
+        btn_frame = ttk.Frame(p)
+        btn_frame.grid(row=3, column=0, columnspan=3, pady=5, sticky=tk.W)
+        ttk.Button(btn_frame, text="Проверить LLM", command=self._test_openai_llm).pack(side=tk.LEFT, padx=3)
 
-        self._llm_widgets = {
-            "provider": self._llm_provider_var,
-            "cli_path": self._llm_cli_path_entry,
-            "cli_model": self._llm_cli_model_var,
-            "cli_timeout": self._llm_cli_timeout_entry,
-            "cli_btn_frame": self._llm_cli_btn_frame,
-            "url": self._llm_url_entry,
-            "key": self._llm_key_entry,
-            "model": self._llm_model_entry,
-            "status": self._llm_status_label,
-        }
+    def _build_mock_panel(self):
+        p = self._mock_panel
+        ttk.Label(p, text="Демо-режим — проверка не требуется. Ответы генерируются локально.",
+                  foreground="#cc6600", wraplength=400).grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=5)
 
-        self._show_provider_fields("onebit_newton_cli")
+    # ── Panel switching ──
 
-    def _show_provider_fields(self, provider):
-        is_openai = (provider == "openai_compatible")
-        is_newton = (provider == "onebit_newton_cli")
-        is_mock = (provider == "mock")
+    def _show_provider_panel(self, provider):
+        self._onebit_panel.grid_remove()
+        self._openai_panel.grid_remove()
+        self._mock_panel.grid_remove()
 
-        # Newton CLI fields
-        state_visible = tk.NORMAL if is_newton else tk.DISABLED
-        self._llm_cli_path_entry.configure(state=state_visible)
-        self._llm_cli_model_var.set("gpt4")
-        self._llm_cli_timeout_entry.configure(state=state_visible)
-        for child in self._llm_cli_btn_frame.winfo_children():
-            child.configure(state=state_visible)
-
-        # OpenAI fields
-        state_openai = tk.NORMAL if is_openai else tk.DISABLED
-        self._llm_url_entry.configure(state=state_openai)
-        self._llm_key_entry.configure(state=state_openai)
-        self._llm_model_entry.configure(state=state_openai)
-
-        if is_mock:
-            self._llm_status_label.configure(text="Mock — проверка не требуется", foreground="#cc6600")
-        else:
+        if provider == "onebit_newton_cli":
+            self._onebit_panel.grid()
             self._llm_status_label.configure(text="Не проверено", foreground="gray")
+        elif provider == "openai_compatible":
+            self._openai_panel.grid()
+            self._llm_status_label.configure(text="Не проверено", foreground="gray")
+        elif provider == "mock":
+            self._mock_panel.grid()
+            self._llm_status_label.configure(text="Mock — проверка не требуется", foreground="#cc6600")
 
     def _on_llm_provider_change(self, event=None):
         p = self._llm_provider_var.get()
-        self._llm_status_label.configure(text="Не проверено", foreground="gray")
-        self._show_provider_fields(p)
+        self._show_provider_panel(p)
 
-    def _toggle_llm_key_visibility(self):
-        show = self._llm_show_key_var.get()
-        self._llm_key_entry.configure(show="" if show else "*")
+    # ── Token visibility toggles ──
+
+    def _toggle_onebit_token_visibility(self):
+        show = self._llm_onebit_show_token_var.get()
+        self._llm_onebit_token_entry.configure(show="" if show else "*")
+
+    def _toggle_openai_key_visibility(self):
+        show = self._llm_openai_show_key_var.get()
+        self._llm_openai_key_entry.configure(show="" if show else "*")
+
+    # ── Newton CLI diagnostics ──
+
+    def _get_cli_path(self):
+        return self._llm_onebit_cli_path_entry.get().strip()
+
+    def _get_onebit_token(self):
+        return self._llm_onebit_token_entry.get().strip()
+
+    def _get_onebit_model(self):
+        return self._llm_onebit_model_var.get()
+
+    def _get_onebit_timeout(self):
+        try:
+            return int(self._llm_onebit_timeout_entry.get().strip() or "120")
+        except ValueError:
+            return 120
+
+    def _build_cli_base_args(self):
+        path = self._get_cli_path()
+        if path.endswith(".cmd") or path.endswith(".bat"):
+            return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", path]
+        return [path]
 
     def _discover_cli(self):
         import shutil
@@ -237,104 +294,187 @@ class SettingsFrame(ttk.Frame):
         for path in candidates:
             resolved = shutil.which(path)
             if resolved:
-                self._llm_cli_path_entry.delete(0, tk.END)
-                self._llm_cli_path_entry.insert(0, resolved)
+                self._llm_onebit_cli_path_entry.delete(0, tk.END)
+                self._llm_onebit_cli_path_entry.insert(0, resolved)
                 self._llm_status_label.configure(text=f"Найден: {resolved}", foreground="green")
                 return
         self._llm_status_label.configure(text="CLI не найден", foreground="red")
 
-    def _check_cli(self):
-        path = self._llm_cli_path_entry.get().strip()
+    def _check_cli_version(self):
+        path = self._get_cli_path()
         if not path:
             self._llm_status_label.configure(text="Укажите путь CLI", foreground="red")
             return
-        import os
-
-        from services.llm_providers import OneBitNewtonCLIProvider
-        token = os.getenv("NEWTON_TOKEN", "")
         try:
-            timeout = int(self._llm_cli_timeout_entry.get().strip() or "15")
-        except ValueError:
-            timeout = 15
-        p = OneBitNewtonCLIProvider(cli_path=path, model="gpt4", token=token, timeout_seconds=timeout)
-        result = p.check_connection()
-        if result.ok:
-            self._llm_status_label.configure(text=result.safe_message, foreground="green")
-        else:
-            self._llm_status_label.configure(text=result.safe_message, foreground="red")
+            base = self._build_cli_base_args()
+            result = subprocess.run(base + ["version"], capture_output=True, text=True,
+                                    timeout=15, shell=False)
+            if result.returncode == 0:
+                self._llm_status_label.configure(
+                    text=f"Версия: {result.stdout.strip()[:100]}", foreground="green")
+            else:
+                self._llm_status_label.configure(
+                    text=f"CLI exit {result.returncode}: {result.stderr[:150]}", foreground="red")
+        except FileNotFoundError:
+            self._llm_status_label.configure(text=f"CLI не найден: {path}", foreground="red")
+        except Exception as e:
+            self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
 
-    def _test_llm(self):
-        pt = self._llm_provider_var.get()
+    def _check_cli_health(self):
+        path = self._get_cli_path()
+        if not path:
+            self._llm_status_label.configure(text="Укажите путь CLI", foreground="red")
+            return
+        try:
+            base = self._build_cli_base_args()
+            result = subprocess.run(base + ["health"], capture_output=True, text=True,
+                                    timeout=15, shell=False)
+            if result.returncode == 0:
+                self._llm_status_label.configure(
+                    text=f"Health OK: {result.stdout.strip()[:100]}", foreground="green")
+                messagebox.showinfo("Health", "CLI health check прошёл успешно.\n\n"
+                                    "Примечание: health НЕ проверяет аутентификацию токена. "
+                                    "Для проверки токена нажмите «Проверить токен и LLM».")
+            else:
+                self._llm_status_label.configure(
+                    text=f"Health exit {result.returncode}", foreground="red")
+        except FileNotFoundError:
+            self._llm_status_label.configure(text=f"CLI не найден: {path}", foreground="red")
+        except Exception as e:
+            self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
 
-        if pt == "mock":
-            self._llm_status_label.configure(text="Mock — проверка не требуется", foreground="#cc6600")
+    def _check_cli_token_and_llm(self):
+        from services.llm_providers import OneBitNewtonCLIProvider, OneBitProviderError
+
+        path = self._get_cli_path()
+        token = self._get_onebit_token()
+        model = self._get_onebit_model()
+        timeout = self._get_onebit_timeout()
+
+        if not path:
+            self._llm_status_label.configure(text="Укажите путь CLI", foreground="red")
+            return
+        if not token:
+            self._llm_status_label.configure(
+                text="Ошибка: токен не указан. Заполните поле «Токен БИТ Ньютон».", foreground="red")
             return
 
-        if pt == "onebit_newton_cli":
-            import os
+        self._llm_status_label.configure(text="Проверяю токен и LLM...", foreground="#3366cc")
+        self.update_idletasks()
 
-            from services.llm_providers import OneBitNewtonCLIProvider
-            path = self._llm_cli_path_entry.get().strip()
-            model = self._llm_cli_model_var.get()
-            token = os.getenv("NEWTON_TOKEN", "")
-            try:
-                timeout = int(self._llm_cli_timeout_entry.get().strip() or "120")
-            except ValueError:
-                timeout = 120
+        p = OneBitNewtonCLIProvider(cli_path=path, model=model, token=token, timeout_seconds=timeout)
 
-            p = OneBitNewtonCLIProvider(cli_path=path, model=model, token=token, timeout_seconds=timeout)
-
-            conn = p.check_connection()
-            if not conn.ok:
-                self._llm_status_label.configure(text=f"CLI: {conn.safe_message}", foreground="red")
-                return
-
-            try:
-                result = p.generate(
-                    system_prompt="Return valid JSON with only one key: status, and its value: ok. Output ONLY the JSON object, no extra text.",
-                    user_prompt='{"status": "ok"}',
-                    model=model,
-                    temperature=0.1,
-                    max_tokens=128,
-                )
-                parsed = json.loads(result)
-                if parsed.get("status") == "ok":
-                    self._llm_status_label.configure(text=f"OK — {model}", foreground="green")
-                else:
-                    self._llm_status_label.configure(text=f"OK, но неожиданный ответ: {result[:100]}", foreground="#cc6600")
-            except Exception as e:
-                self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
+        # Step 1: check CLI works
+        conn = p.check_connection()
+        if not conn.ok:
+            self._llm_status_label.configure(text=f"CLI: {conn.safe_message}", foreground="red")
             return
 
-        if pt == "openai_compatible":
-            url = self._llm_url_entry.get().strip()
-            key = self._llm_key_entry.get().strip()
-            model = self._llm_model_entry.get().strip()
+        # Step 2: real generate with schema validation
+        try:
+            result = p.generate(
+                system_prompt="Return valid JSON with exactly one key: status, value: ok. "
+                              "Output ONLY the JSON object, no explanation, no markdown fences.",
+                user_prompt='{"status": "ok"}',
+                model=model,
+                temperature=0.1,
+                max_tokens=128,
+            )
+            parsed = json.loads(result)
+            if parsed.get("status") == "ok":
+                self._llm_status_label.configure(text=f"OK — {model}", foreground="green")
+            else:
+                self._llm_status_label.configure(
+                    text=f"OK, но неожиданный ответ: {result[:100]}", foreground="#cc6600")
+        except OneBitProviderError as e:
+            self._llm_status_label.configure(text=f"Ошибка [{e.code}]: {e.safe_message}", foreground="red")
+            messagebox.showerror("Ошибка Newton CLI",
+                                 f"Код: {e.code}\n"
+                                 f"Этап: {e.stage}\n"
+                                 f"{e.safe_message}\n\n"
+                                 f"stderr: {e.safe_stderr[:200] if e.safe_stderr else '(нет)'}")
+        except Exception as e:
+            self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
 
-            if not url or not key:
-                self._llm_status_label.configure(text="Ошибка: укажите Base URL и API Key", foreground="red")
+    def _copy_diagnostics(self):
+        lines = []
+        lines.append("=== Диагностика OneBit Newton CLI ===")
+        lines.append(f"CLI путь: {self._get_cli_path()}")
+        lines.append(f"Токен задан: {'да' if self._get_onebit_token() else 'нет'}")
+        lines.append(f"Модель: {self._get_onebit_model()}")
+        lines.append(f"Таймаут: {self._get_onebit_timeout()}с")
+
+        # CLI exists?
+        path = self._get_cli_path()
+        lines.append(f"Файл CLI существует: {os.path.isfile(path) if path else 'путь не указан'}")
+
+        # version
+        if path and os.path.isfile(path):
+            try:
+                base = self._build_cli_base_args()
+                r = subprocess.run(base + ["version"], capture_output=True, text=True,
+                                   timeout=15, shell=False)
+                lines.append(f"CLI version exit={r.returncode}")
+                if r.stdout.strip():
+                    lines.append(f"  stdout: {r.stdout.strip()[:200]}")
+                if r.stderr.strip():
+                    lines.append(f"  stderr: {r.stderr.strip()[:200]}")
+            except Exception as e:
+                lines.append(f"CLI version ошибка: {e}")
+
+            # health
+            try:
+                base = self._build_cli_base_args()
+                r = subprocess.run(base + ["health"], capture_output=True, text=True,
+                                   timeout=15, shell=False)
+                lines.append(f"CLI health exit={r.returncode}")
+                if r.stdout.strip():
+                    lines.append(f"  stdout: {r.stdout.strip()[:200]}")
+                if r.stderr.strip():
+                    lines.append(f"  stderr: {r.stderr.strip()[:200]}")
+            except Exception as e:
+                lines.append(f"CLI health ошибка: {e}")
+
+        # env
+        lines.append(f"NEWTON_TOKEN env: {'задан' if os.getenv('NEWTON_TOKEN') else 'не задан'}")
+        lines.append(f"ONEBIT_LLM_TOKEN env: {'задан' if os.getenv('ONEBIT_LLM_TOKEN') else 'не задан'}")
+
+        text = "\n".join(lines)
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self._llm_status_label.configure(text="Диагностика скопирована в буфер обмена", foreground="#3366cc")
+
+    def _test_openai_llm(self):
+        url = self._llm_openai_url_entry.get().strip()
+        key = self._llm_openai_key_entry.get().strip()
+        model = self._llm_openai_model_entry.get().strip()
+
+        if not url or not key:
+            self._llm_status_label.configure(text="Ошибка: укажите Base URL и API Key", foreground="red")
+            return
+
+        from services.llm_service import LLMClient
+        try:
+            client = LLMClient(api_url=url, api_key=key, model=model, mock_mode=False)
+            conn = client.check_connection()
+            if not conn:
+                self._llm_status_label.configure(text="Ошибка: нет соединения с API", foreground="red")
                 return
 
-            from services.llm_service import LLMClient
-            try:
-                client = LLMClient(api_url=url, api_key=key, model=model, mock_mode=False)
-                conn = client.check_connection()
-                if not conn:
-                    self._llm_status_label.configure(text="Ошибка: нет соединения с API", foreground="red")
-                    return
+            smoke_schema = {"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}
+            result, raw = client.generate_json(
+                system_prompt="Return JSON with status: ok",
+                user_prompt="Return {\"status\": \"ok\"}",
+                json_schema=smoke_schema,
+            )
+            if result.get("status") == "ok":
+                self._llm_status_label.configure(text=f"OK — модель: {model}", foreground="green")
+            else:
+                self._llm_status_label.configure(text=f"OK, но ответ: {result}", foreground="#cc6600")
+        except Exception as e:
+            self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
 
-                smoke_schema = {"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}
-                result, raw = client.generate_json(
-                    system_prompt="Return JSON with status: ok",
-                    user_prompt="Return {\"status\": \"ok\"}",
-                    json_schema=smoke_schema,
-                )
-                if result.get("status") == "ok":
-                    self._llm_status_label.configure(text=f"OK — модель: {model}", foreground="green")
-                else:
-                    self._llm_status_label.configure(text=f"OK, но ответ: {result}", foreground="#cc6600")
-            except Exception as e:
-                self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
+    # ── Load / Save ──
 
     def _load_settings(self):
         load_dotenv(self.env_path)
@@ -360,19 +500,31 @@ class SettingsFrame(ttk.Frame):
         self._mode_var.set(os.getenv("PROTOCOL_MODE", "auto"))
         self._continue_var.set(os.getenv("BATCH_CONTINUE_AFTER_ERROR", "true").lower() in ("true", "1", "yes"))
 
-        self._llm_provider_var.set(os.getenv("LLM_PROVIDER", "onebit_newton_cli"))
-        self._llm_cli_path_entry.delete(0, tk.END)
-        self._llm_cli_path_entry.insert(0, os.getenv("ONEBIT_CLI_PATH", r"C:\Users\egore\AppData\Local\NewtonCLI\newton.cmd"))
-        self._llm_cli_model_var.set(os.getenv("LLM_MODEL", "gpt4"))
-        self._llm_cli_timeout_entry.delete(0, tk.END)
-        self._llm_cli_timeout_entry.insert(0, os.getenv("ONEBIT_CLI_TIMEOUT_SECONDS", "120"))
-        self._llm_url_entry.delete(0, tk.END)
-        self._llm_url_entry.insert(0, os.getenv("LLM_API_URL", ""))
-        self._llm_key_entry.delete(0, tk.END)
-        self._llm_key_entry.insert(0, os.getenv("LLM_API_KEY", ""))
-        self._llm_model_entry.delete(0, tk.END)
-        self._llm_model_entry.insert(0, os.getenv("LLM_MODEL", "gpt4"))
-        self._show_provider_fields(self._llm_provider_var.get())
+        # LLM provider
+        provider = os.getenv("LLM_PROVIDER", "onebit_newton_cli")
+        self._llm_provider_var.set(provider)
+
+        # OneBit Newton CLI fields
+        onebit_token = os.getenv("ONEBIT_LLM_TOKEN", "") or os.getenv("NEWTON_TOKEN", "")
+        self._llm_onebit_token_entry.delete(0, tk.END)
+        self._llm_onebit_token_entry.insert(0, onebit_token)
+
+        self._llm_onebit_cli_path_entry.delete(0, tk.END)
+        self._llm_onebit_cli_path_entry.insert(0, os.getenv(
+            "ONEBIT_CLI_PATH", r"C:\Users\egore\AppData\Local\NewtonCLI\newton.cmd"))
+        self._llm_onebit_model_var.set(os.getenv("LLM_MODEL", "gpt4"))
+        self._llm_onebit_timeout_entry.delete(0, tk.END)
+        self._llm_onebit_timeout_entry.insert(0, os.getenv("ONEBIT_CLI_TIMEOUT_SECONDS", "120"))
+
+        # OpenAI fields
+        self._llm_openai_url_entry.delete(0, tk.END)
+        self._llm_openai_url_entry.insert(0, os.getenv("LLM_API_URL", ""))
+        self._llm_openai_key_entry.delete(0, tk.END)
+        self._llm_openai_key_entry.insert(0, os.getenv("LLM_API_KEY", ""))
+        self._llm_openai_model_entry.delete(0, tk.END)
+        self._llm_openai_model_entry.insert(0, os.getenv("LLM_MODEL", "gpt-4o"))
+
+        self._show_provider_panel(provider)
 
     def _save_settings(self):
         bitlink_e = self._block_entries.get("бит_link", {})
@@ -398,28 +550,28 @@ class SettingsFrame(ttk.Frame):
             "BATCH_CONTINUE_AFTER_ERROR": str(self._continue_var.get()).lower(),
             "LLM_PROVIDER": self._llm_provider_var.get(),
             "LLM_MOCK": "true" if self._llm_provider_var.get() == "mock" else "false",
-            "LLM_API_URL": self._llm_url_entry.get(),
-            "LLM_API_KEY": self._llm_key_entry.get(),
-            "ONEBIT_CLI_PATH": self._llm_cli_path_entry.get(),
-            "ONEBIT_CLI_TRANSPORT": "native",
-            "ONEBIT_CLI_TIMEOUT_SECONDS": self._llm_cli_timeout_entry.get(),
         }
+
+        provider = self._llm_provider_var.get()
+        if provider == "onebit_newton_cli":
+            env_map["ONEBIT_LLM_TOKEN"] = self._llm_onebit_token_entry.get().strip()
+            env_map["ONEBIT_CLI_PATH"] = self._llm_onebit_cli_path_entry.get().strip()
+            env_map["ONEBIT_CLI_TRANSPORT"] = "native"
+            env_map["ONEBIT_CLI_TIMEOUT_SECONDS"] = self._llm_onebit_timeout_entry.get().strip()
+            env_map["LLM_MODEL"] = self._llm_onebit_model_var.get()
+        elif provider == "openai_compatible":
+            env_map["LLM_API_URL"] = self._llm_openai_url_entry.get().strip()
+            env_map["LLM_API_KEY"] = self._llm_openai_key_entry.get().strip()
+            env_map["LLM_MODEL"] = self._llm_openai_model_entry.get().strip()
 
         for key, value in env_map.items():
             set_key(str(self.env_path), key, value)
 
-        # Provider-specific model save
-        provider = self._llm_provider_var.get()
-        set_key(str(self.env_path), "LLM_PROVIDER", provider)
-        if provider == "onebit_newton_cli":
-            set_key(str(self.env_path), "LLM_MODEL", self._llm_cli_model_var.get())
-            set_key(str(self.env_path), "ONEBIT_CLI_PATH", self._llm_cli_path_entry.get().strip())
-        elif provider == "openai_compatible":
-            set_key(str(self.env_path), "LLM_MODEL", self._llm_model_entry.get())
-
         importlib.reload(settings)
         reload_runtime_config()
         messagebox.showinfo("Успех", "Настройки сохранены")
+
+    # ── Other service tests ──
 
     def _test_bitlink(self):
         client = BitlinkClient()
