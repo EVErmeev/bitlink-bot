@@ -7,11 +7,11 @@
   "active_task_id": "TASK-2026-08-01-start-app-confluence-mcp",
   "active_task_file": "docs/opencode/tasks/TASK-2026-08-01-start-app-confluence-mcp.md",
   "base_commit": "034e2a5adab04e737cfdcef8a24b80e1a75dd4a4",
-  "head_commit": "034e2a5adab04e737cfdcef8a24b80e1a75dd4a4",
+  "head_commit": "5a9080fdb7c1bde0b1623b2a1558c24d395d018f",
   "working_branch": "fix/audit-e7cc95f",
   "pull_request_url": "https://github.com/EVErmeev/bitlink-bot/pull/1",
-  "status": "in_progress",
-  "validation_state": "implementing_fixes",
+  "status": "awaiting_independent_validation",
+  "validation_state": "awaiting_review",
   "required_checks": [
     "python -m compileall .",
     "pytest -q",
@@ -238,6 +238,6 @@
     "BB-MAJ-019: real Confluence publish not implemented",
     "BB-MAJ-020: queue stop is incomplete"
   ],
-  "next_action": "Implement code quality fixes. Run full CI pipeline (compileall, pytest, ruff, mypy) to confirm all checks pass.",
-  "updated_at": "2026-08-01T20:30:00Z"
+  "next_action": "Await independent validation. Do NOT merge. Do NOT set accepted. Smoke page: https://art-conf.spbco.1cbit.ru/pages/viewpage.action?pageId=213352588",
+  "updated_at": "2026-08-01T21:55:00Z"
 }
