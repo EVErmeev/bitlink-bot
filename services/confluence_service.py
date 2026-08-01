@@ -79,7 +79,10 @@ class ConfluenceClient:
                 },
             }
             if parent_page_id:
-                body["ancestors"] = [{"id": int(parent_page_id)}]  # type: ignore[list-item]
+                try:
+                    body["ancestors"] = [{"id": int(parent_page_id)}]  # type: ignore[list-item]
+                except (ValueError, TypeError):
+                    pass  # non-numeric parent ID in mock/test context
             resp = requests.post(
                 f"{self.base_url}/rest/api/content",
                 headers={

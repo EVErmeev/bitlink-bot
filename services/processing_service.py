@@ -10,11 +10,8 @@ try:
     import settings
     from meeting_metadata import determine_meeting_date
     from protocol_templates.registry import TemplateRegistry
-    from services.bitlink_service import BitlinkClient
-    from services.confluence_service import ConfluenceClient
     from services.fact_extraction import extract_atomic_items
     from services.fact_validation import apply_corrections, validate_facts
-    from services.llm_service import LLMClient
     from services.runtime_estimator import RuntimeEstimator
     from services.source_isolation import (
         create_input_manifest,
@@ -22,24 +19,19 @@ try:
         generate_source_context_id,
         validate_source_alignment,
     )
-    from services.telegram_service import TelegramClient
     from services.topic_coverage import (
         audit_topic_coverage,
         save_coverage_report,
         validate_topic_source_alignment,
     )
-    from services.transcription_service import TranscriptionClient
 except ImportError:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from bitlink_service import BitlinkClient  # type: ignore[no-redef]
-    from confluence_service import ConfluenceClient  # type: ignore[no-redef]
     from fact_extraction import extract_atomic_items  # type: ignore[no-redef]
     from fact_validation import (  # type: ignore[no-redef]
         apply_corrections,
         validate_facts,
     )
-    from llm_service import LLMClient  # type: ignore[no-redef]
     from runtime_estimator import RuntimeEstimator  # type: ignore[no-redef]
     from source_isolation import (  # type: ignore[no-redef]
         create_input_manifest,
@@ -47,13 +39,11 @@ except ImportError:
         generate_source_context_id,
         validate_source_alignment,
     )
-    from telegram_service import TelegramClient  # type: ignore[no-redef]
     from topic_coverage import (  # type: ignore[no-redef]
         audit_topic_coverage,
         save_coverage_report,
         validate_topic_source_alignment,
     )
-    from transcription_service import TranscriptionClient  # type: ignore[no-redef]
 
     import settings
     from meeting_metadata import determine_meeting_date
@@ -69,15 +59,26 @@ class ProcessingService:
         "completed",
     ]
 
-    def __init__(self, progress_callback=None):
+    def __init__(self, progress_callback=None, config=None):
         self.progress_callback = progress_callback
-        self.bitlink = BitlinkClient()
-        self.transcription = TranscriptionClient()
-        self.confluence = ConfluenceClient()
-        self.telegram = TelegramClient()
-        self.llm = LLMClient()
+        if config is None:
+            from services.runtime_config import get_runtime_config
+            config = get_runtime_config()
+        from services.client_factory import (
+            build_bitlink_client,
+            build_confluence_client,
+            build_llm_client,
+            build_telegram_client,
+            build_transcription_client,
+        )
+        self.bitlink = build_bitlink_client(config)
+        self.transcription = build_transcription_client(config)
+        self.confluence = build_confluence_client(config)
+        self.telegram = build_telegram_client(config)
+        self.llm = build_llm_client(config)
         self.templates = TemplateRegistry()
         self.estimator = RuntimeEstimator()
+        self.config = config
 
     def process_item(self, item: BatchItem) -> dict:
         start_time = datetime.now()

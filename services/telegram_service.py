@@ -10,8 +10,8 @@ class TelegramConfigurationError(Exception):
 class TelegramClient:
     def __init__(self, bot_token=None, chat_id=None):
         self.mock_mode = settings.TELEGRAM_MOCK
-        self.bot_token = bot_token or settings.TG_BOT_TOKEN
-        self.chat_id = chat_id or settings.TG_CHAT_ID
+        self.bot_token = bot_token if bot_token is not None else settings.TG_BOT_TOKEN
+        self.chat_id = chat_id if chat_id is not None else settings.TG_CHAT_ID
         self.enabled = settings.TELEGRAM_ENABLED
 
         if self.mock_mode:

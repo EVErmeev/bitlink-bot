@@ -1,3 +1,4 @@
+import json
 import queue
 import threading
 import tkinter as tk
@@ -9,6 +10,7 @@ import settings
 from models.batch import BatchItem, BatchRun
 from services.batch_service import BatchService
 from services.processing_service import ProcessingService
+from services.runtime_config import get_runtime_config
 from services.runtime_estimator import RuntimeEstimator
 
 _queue_controller = None
@@ -56,33 +58,141 @@ class QueueController:
 
     def start_processing(self, progress_callback=None):
         self.processing = True
+        if self.batch_service.batch_run:
+            self.batch_service.batch_run.cancel_requested = False
         thread = threading.Thread(target=self._process_batch, args=(progress_callback,), daemon=True)
         thread.start()
 
     def _process_batch(self, progress_callback):
-        service = ProcessingService(progress_callback=self._on_progress)
-        batch = self.batch_service.batch_run
-        batch.status = "processing"
-        batch.started_at = datetime.now().isoformat()
+        try:
+            batch = self.batch_service.batch_run
+            batch.status = "processing"
+            batch.started_at = datetime.now().isoformat()
+            config = get_runtime_config()
+            service = ProcessingService(progress_callback=self._on_progress, config=config)
 
-        for i, item in enumerate(batch.items):
-            if batch.cancel_requested:
-                item.status = "cancelled"
-                continue
-            if item.status in ("completed", "skipped"):
-                continue
+            for i, item in enumerate(batch.items):
+                if batch.cancel_requested:
+                    item.status = "cancelled"
+                    continue
+                if item.status in ("completed", "skipped"):
+                    continue
 
-            batch.current_index = i
-            result = service.process_item(item)
+                batch.current_index = i
+                item.status = "processing"
+                item.error_details = None
+                result = service.process_item(item)
 
-            if not result["success"] and not settings.BATCH_CONTINUE_AFTER_ERROR:
+                if not result["success"] and not config.batch_continue_after_error:
+                    item.status = "failed"
+                    if not item.error_details and result.get("error"):
+                        item.error_details = str(result["error"])
+                    batch.status = "failed"
+                    break
+
+            batch.completed_at = datetime.now().isoformat()
+
+            completed = sum(1 for it in batch.items if it.status == "completed")
+            failed = sum(1 for it in batch.items if it.status == "failed")
+            cancelled = sum(1 for it in batch.items if it.status == "cancelled")
+            validation_failed = sum(1 for it in batch.items if it.status == "validation_failed")
+            processed = completed + failed + cancelled + validation_failed
+            pending = sum(1 for it in batch.items if it.status == "pending")
+
+            if processed == 0 and pending > 0:
                 batch.status = "failed"
-                break
+            elif processed == 0 and pending == 0:
+                batch.status = "nothing_to_process"
+            elif batch.cancel_requested:
+                batch.status = "cancelled"
+            elif failed > 0 or validation_failed > 0:
+                batch.status = "completed_with_errors"
+            else:
+                batch.status = "completed"
 
-        batch.completed_at = datetime.now().isoformat()
-        batch.status = "completed" if not batch.cancel_requested else "cancelled"
-        self.processing = False
-        self.progress_queue.put(("batch_done", 100, None))
+            self._save_batch_report(batch, completed, failed, cancelled, validation_failed, pending)
+
+            config = get_runtime_config()
+            if config.telegram_send_batch_summary and config.telegram_enabled:
+                try:
+                    from services.telegram_service import TelegramClient
+                    tg = TelegramClient(
+                        bot_token=config.telegram_bot_token,
+                        chat_id=config.telegram_chat_id,
+                    )
+                    summary = (
+                        f"Пакетная обработка завершена\n"
+                        f"Всего элементов: {len(batch.items)}\n"
+                        f"Успешно: {completed}\n"
+                        f"С ошибками: {failed}\n"
+                        f"Валидация не пройдена: {validation_failed}\n"
+                        f"Отменено: {cancelled}\n"
+                        f"Ожидает: {pending}\n"
+                        f"Статус: {batch.status}"
+                    )
+                    tg.send_batch_summary(summary)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            if self.batch_service.batch_run:
+                self.batch_service.batch_run.status = "failed"
+                self._save_runtime_error_log(str(e))
+            self.progress_queue.put(("batch_done", 100, None))
+        finally:
+            self.processing = False
+            self.progress_queue.put(("batch_done", 100, None))
+
+    def _save_batch_report(self, batch, completed, failed, cancelled, validation_failed, pending):
+        try:
+            report_dir = settings.DATA_DIR / "batch_reports"
+            report_dir.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            report_path = report_dir / f"batch_report_{timestamp}.json"
+            report = {
+                "batch_id": batch.batch_id,
+                "status": batch.status,
+                "started_at": batch.started_at,
+                "completed_at": batch.completed_at,
+                "summary": {
+                    "total": len(batch.items),
+                    "completed": completed,
+                    "failed": failed,
+                    "cancelled": cancelled,
+                    "validation_failed": validation_failed,
+                    "pending": pending,
+                },
+                "items": [],
+            }
+            for item in batch.items:
+                report["items"].append({
+                    "item_id": item.item_id,
+                    "display_name": item.display_name,
+                    "source_type": item.source_type,
+                    "source_path": str(item.source_path) if item.source_path else None,
+                    "status": item.status,
+                    "status_message": item.status_message,
+                    "error_details": item.error_details,
+                    "result_url": item.result_url,
+                    "actual_seconds": item.actual_seconds,
+                    "protocol_template": item.protocol_template,
+                    "protocol_mode": item.protocol_mode,
+                })
+            with open(report_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+    def _save_runtime_error_log(self, error_text: str):
+        try:
+            log_dir = settings.DEBUG_DIR
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "runtime_error.log"
+            timestamp = datetime.now().isoformat()
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(f"[{timestamp}] {error_text}\n")
+        except Exception:
+            pass
 
     def _on_progress(self, stage, percent, item):
         self.progress_queue.put((stage, percent, item))
@@ -102,16 +212,54 @@ class SourceQueueFrame(ttk.Frame):
 
     MODE_NAMES = {"auto": "Авто", "brief": "Краткий", "detailed": "Подробный"}
 
+    STAGE_NAMES = {
+        "loading_source": "Загрузка источника",
+        "transcribing": "Транскрибация",
+        "extracting_metadata": "Извлечение метаданных",
+        "extracting_items": "Извлечение элементов",
+        "gap_audit": "Gap-аудит",
+        "building_topics": "Построение тем",
+        "generating_protocol": "Генерация протокола",
+        "fact_validation": "Фактологическая проверка",
+        "structure_validation": "Структурная проверка",
+        "rendering": "Рендеринг",
+        "publishing_confluence": "Публикация в Confluence",
+        "sending_telegram": "Отправка в Telegram",
+        "completed": "Завершён",
+        "failed": "Ошибка",
+    }
+
     def __init__(self, parent, main_window):
         super().__init__(parent)
         self.main_window = main_window
         self.qc = get_queue_controller()
         self.estimator = RuntimeEstimator()
+        self.config = get_runtime_config()
+        self._current_stage = {}
+        self._last_progress = {}
+        self._elapsed_start = None
         self._build()
         self._refresh_table()
         self._start_progress_checker()
 
     def _build(self):
+        if self.config.is_demo_mode():
+            banner = ttk.LabelFrame(self, text=" РЕЖИМ ОТЛАДКИ ", padding=8)
+            banner.pack(fill=tk.X, padx=10, pady=(5, 0))
+            modes = []
+            if self.config.llm_mode == "mock":
+                modes.append("LLM")
+            if self.config.newton_mode == "mock":
+                modes.append("Транскрибация")
+            if self.config.confluence_mode == "mock":
+                modes.append("Confluence")
+            if self.config.telegram_mode == "mock":
+                modes.append("Telegram")
+            if self.config.bitlink_mode == "mock":
+                modes.append("BIT.Link")
+            banner_text = f"DEMO/MOCK: {', '.join(modes)} — данные имитируются, API не вызываются"
+            ttk.Label(banner, text=banner_text, foreground="#cc6600", font=("Segoe UI", 9, "bold")).pack()
+
         top = ttk.Frame(self)
         top.pack(fill=tk.X, padx=10, pady=5)
         ttk.Label(top, text="Очередь обработки", font=("Segoe UI", 14, "bold")).pack(side=tk.LEFT)
@@ -120,12 +268,13 @@ class SourceQueueFrame(ttk.Frame):
         tree_frame = ttk.LabelFrame(self, text="Источники в очереди", padding=5)
         tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
 
-        columns = ("№", "Имя", "Путь", "Размер", "Длит/слов", "Шаблон", "Режим", "Confluence", "Статус", "Результат")
+        columns = ("№", "Имя", "Путь", "Размер", "Длит/слов", "Шаблон", "Режим", "Confluence", "Стадия", "Статус", "Длит", "Ошибка")
         self.tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="extended")
 
         widths = {
-            "№": 40, "Имя": 200, "Путь": 200, "Размер": 80, "Длит/слов": 80,
-            "Шаблон": 150, "Режим": 70, "Confluence": 120, "Статус": 100, "Результат": 100
+            "№": 40, "Имя": 180, "Путь": 150, "Размер": 70, "Длит/слов": 70,
+            "Шаблон": 130, "Режим": 60, "Confluence": 100, "Стадия": 120,
+            "Статус": 100, "Длит": 65, "Ошибка": 120,
         }
         for col in columns:
             self.tree.heading(col, text=col)
@@ -137,6 +286,7 @@ class SourceQueueFrame(ttk.Frame):
         self.tree.configure(yscrollcommand=scrollbar.set)
 
         self.tree.bind("<Delete>", self._remove_selected)
+        self.tree.bind("<Double-1>", self._on_double_click)
 
         btn1 = ttk.Frame(self)
         btn1.pack(fill=tk.X, padx=10, pady=2)
@@ -146,6 +296,7 @@ class SourceQueueFrame(ttk.Frame):
         ttk.Button(btn1, text="▲ Вверх", command=self._move_up).pack(side=tk.LEFT, padx=3)
         ttk.Button(btn1, text="▼ Вниз", command=self._move_down).pack(side=tk.LEFT, padx=3)
         ttk.Button(btn1, text="Изменить параметры", command=self._edit_params).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn1, text="Сбросить статус", command=self._reset_status).pack(side=tk.LEFT, padx=3)
 
         btn2 = ttk.Frame(self)
         btn2.pack(fill=tk.X, padx=10, pady=2)
@@ -153,6 +304,8 @@ class SourceQueueFrame(ttk.Frame):
         self.start_btn.pack(side=tk.LEFT, padx=3)
         self.stop_btn = ttk.Button(btn2, text="■ Стоп", command=self._stop_processing, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=3)
+
+        self.empty_label = ttk.Label(self, text="Нет элементов для обработки", font=("Segoe UI", 10), foreground="gray")
 
         progress_frame = ttk.LabelFrame(self, text="Прогресс", padding=5)
         progress_frame.pack(fill=tk.X, padx=10, pady=5)
@@ -172,6 +325,8 @@ class SourceQueueFrame(ttk.Frame):
         self.time_label = ttk.Label(progress_frame, text="", font=("Segoe UI", 8))
         self.time_label.pack()
 
+        self._update_empty_label()
+
     def _refresh_table(self):
         self.tree.delete(*self.tree.get_children())
         items = self.qc.get_items()
@@ -188,16 +343,36 @@ class SourceQueueFrame(ttk.Frame):
             elif item.word_count:
                 dur_str = f"{item.word_count} слов"
 
+            stage_text = self._current_stage.get(item.item_id, "")
+            stage_display = self.STAGE_NAMES.get(stage_text, stage_text) if stage_text else ""
+
             status_text = item.status
             if item.status_message:
                 status_text = item.status_message
+
+            actual_str = ""
+            if item.actual_seconds:
+                m, s = divmod(int(item.actual_seconds), 60)
+                actual_str = f"{m}:{s:02d}"
+
+            error_summary = ""
+            if item.error_details:
+                error_summary = item.error_details[:60] + ("..." if len(item.error_details) > 60 else "")
 
             self.tree.insert("", tk.END, iid=item.item_id, values=(
                 i, item.display_name, str(item.source_path or ""), size_str, dur_str,
                 template_name, mode_name,
                 item.parent_page_title or "По умолчанию",
-                status_text, item.result_url or ""
+                stage_display, status_text, actual_str, error_summary,
             ))
+        self._update_empty_label()
+
+    def _update_empty_label(self):
+        items = self.qc.get_items()
+        if not items:
+            self.empty_label.pack(fill=tk.X, padx=10, pady=10)
+        else:
+            self.empty_label.pack_forget()
 
     def _add_files(self):
         paths = filedialog.askopenfilenames(
@@ -207,6 +382,8 @@ class SourceQueueFrame(ttk.Frame):
         if not paths:
             return
 
+        config = get_runtime_config()
+        batch = self.qc.batch_service.batch_run
         items = []
         for p in paths:
             fpath = Path(p)
@@ -227,9 +404,10 @@ class SourceQueueFrame(ttk.Frame):
                 display_name=fpath.name,
                 file_size_bytes=size_bytes,
                 word_count=wc,
-                protocol_template="project_detailed",
-                protocol_mode="auto",
+                protocol_template=config.protocol_template,
+                protocol_mode=config.protocol_mode,
             )
+            item.debug_directory = Path("debug") / batch.batch_id[:8] / item.item_id[:8]
             items.append(item)
 
         self.qc.add_items(items)
@@ -287,6 +465,25 @@ class SourceQueueFrame(ttk.Frame):
             show_item_params_dialog(self, item)
             self._refresh_table()
 
+    def _reset_status(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showwarning("Предупреждение", "Выберите строки для сброса статуса")
+            return
+        for iid in sel:
+            item = self._find_item(iid)
+            if item and item.status != "processing":
+                item.status = "pending"
+                item.status_message = ""
+                item.error_details = None
+                item.result_url = None
+                item.actual_seconds = None
+                item.debug_directory = None
+                batch = self.qc.batch_service.batch_run
+                item.debug_directory = Path("debug") / batch.batch_id[:8] / item.item_id[:8]
+        self._refresh_table()
+        self._save_state()
+
     def _renumber(self):
         for i, item in enumerate(self.qc.get_items(), 1):
             for child in self.tree.get_children():
@@ -302,6 +499,134 @@ class SourceQueueFrame(ttk.Frame):
                 return item
         return None
 
+    def _on_double_click(self, event):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        item = self._find_item(sel[0])
+        if not item:
+            return
+        if item.error_details:
+            self._show_error_dialog(item)
+        elif item.result_url:
+            import webbrowser
+            webbrowser.open(item.result_url)
+
+    def _show_error_dialog(self, item: BatchItem):
+        root = self.winfo_toplevel()
+        dlg = tk.Toplevel(root)
+        dlg.title(f"Ошибка: {item.display_name}")
+        dlg.geometry("600x400")
+        dlg.transient(root)
+        dlg.grab_set()
+
+        ttk.Label(dlg, text=f"Файл: {item.display_name}", font=("Segoe UI", 10, "bold")).pack(padx=10, pady=(10, 5), anchor=tk.W)
+
+        info = ttk.LabelFrame(dlg, text="Информация об элементе", padding=5)
+        info.pack(fill=tk.X, padx=10, pady=5)
+        ttk.Label(info, text=f"Тип источника: {item.source_type}").pack(anchor=tk.W)
+        ttk.Label(info, text=f"Путь: {item.source_path or '—'}").pack(anchor=tk.W)
+        ttk.Label(info, text=f"Шаблон: {self.TEMPLATE_NAMES.get(item.protocol_template, item.protocol_template)}").pack(anchor=tk.W)
+        ttk.Label(info, text=f"Режим: {self.MODE_NAMES.get(item.protocol_mode, item.protocol_mode)}").pack(anchor=tk.W)
+        ttk.Label(info, text=f"Статус: {item.status}").pack(anchor=tk.W)
+        if item.status_message:
+            ttk.Label(info, text=f"Сообщение: {item.status_message}").pack(anchor=tk.W)
+        if item.actual_seconds:
+            ttk.Label(info, text=f"Длительность обработки: {item.actual_seconds:.1f} сек").pack(anchor=tk.W)
+
+        err_frame = ttk.LabelFrame(dlg, text="Детали ошибки", padding=5)
+        err_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        err_text = tk.Text(err_frame, wrap=tk.WORD, font=("Consolas", 9))
+        err_text.pack(fill=tk.BOTH, expand=True)
+        err_text.insert("1.0", item.error_details or "Нет деталей")
+        err_text.configure(state=tk.DISABLED)
+
+        ttk.Button(dlg, text="Закрыть", command=dlg.destroy).pack(pady=10)
+
+    def _run_preflight(self) -> tuple[bool, list[str], bool]:
+        items = self.qc.get_items()
+        errors = []
+        warnings = []
+        processable = [i for i in items if i.status in ("pending",)]
+
+        if not processable:
+            errors.append("Нет элементов для обработки (все элементы уже завершены или пропущены)")
+            return False, errors, True
+
+        for item in processable:
+            if item.source_type in ("local_video", "local_transcript"):
+                if not item.source_path:
+                    errors.append(f"{item.display_name}: не указан путь к файлу")
+                    continue
+                if not item.source_path.exists():
+                    errors.append(f"{item.display_name}: файл не найден: {item.source_path}")
+                    continue
+                try:
+                    sz = item.source_path.stat().st_size
+                    if sz == 0:
+                        errors.append(f"{item.display_name}: файл пуст (0 байт)")
+                except OSError as e:
+                    errors.append(f"{item.display_name}: ошибка доступа к файлу: {e}")
+                    continue
+
+            if item.source_type not in ("local_video", "local_transcript", "bitlink"):
+                errors.append(f"{item.display_name}: неизвестный тип источника: {item.source_type}")
+
+            if not item.protocol_template:
+                warnings.append(f"{item.display_name}: не указан шаблон протокола")
+
+        has_blocking = len(errors) > 0
+        return len(processable) > 0, errors if errors else warnings, has_blocking
+
+    def _show_preflight_dialog(self, errors: list[str], has_blocking: bool):
+        root = self.winfo_toplevel()
+        dlg = tk.Toplevel(root)
+        dlg.title("Предстартовая проверка")
+        dlg.geometry("550x400")
+        dlg.transient(root)
+        dlg.grab_set()
+
+        if has_blocking:
+            ttk.Label(dlg, text="Обнаружены критические ошибки!", foreground="red",
+                      font=("Segoe UI", 11, "bold")).pack(padx=10, pady=(10, 5))
+        elif not errors:
+            ttk.Label(dlg, text="Проверка пройдена успешно", foreground="green",
+                      font=("Segoe UI", 11, "bold")).pack(padx=10, pady=(10, 5))
+        else:
+            ttk.Label(dlg, text="Предупреждения (запуск возможен)", foreground="#cc6600",
+                      font=("Segoe UI", 11, "bold")).pack(padx=10, pady=(10, 5))
+
+        text_frame = ttk.Frame(dlg)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+
+        scrollbar = ttk.Scrollbar(text_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        result_text = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 9),
+                              yscrollcommand=scrollbar.set)
+        result_text.pack(fill=tk.BOTH, expand=True)
+        scrollbar.configure(command=result_text.yview)
+
+        if errors:
+            for line in errors:
+                result_text.insert(tk.END, f"  {line}\n")
+        else:
+            result_text.insert(tk.END, "  Ошибок не обнаружено.\n")
+        result_text.configure(state=tk.DISABLED)
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        if has_blocking:
+            ttk.Button(btn_frame, text="Закрыть", command=dlg.destroy).pack(side=tk.RIGHT, padx=3)
+        else:
+            ttk.Button(btn_frame, text="Отмена", command=dlg.destroy).pack(side=tk.RIGHT, padx=3)
+            def _start_after_preflight():
+                dlg.destroy()
+                self._do_start_processing()
+            ttk.Button(btn_frame, text="Запустить обработку",
+                       command=_start_after_preflight).pack(side=tk.RIGHT, padx=3)
+
     def _start_processing(self):
         if self.qc.processing:
             return
@@ -309,9 +634,31 @@ class SourceQueueFrame(ttk.Frame):
             messagebox.showwarning("Предупреждение", "Очередь пуста")
             return
 
+        has_processable, errors, has_blocking = self._run_preflight()
+
+        if not has_processable:
+            messagebox.showinfo("Информация", "Нет элементов для обработки. Все элементы уже завершены или пропущены.")
+            return
+
+        if errors:
+            self._show_preflight_dialog(errors, has_blocking)
+            if has_blocking:
+                return
+        else:
+            self._show_preflight_dialog(errors, has_blocking)
+            return
+
+    def _do_start_processing(self):
+        if self.qc.processing:
+            return
+
         self.start_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
         self._elapsed_start = datetime.now()
+        self.overall_progress["value"] = 0
+        self.current_progress["value"] = 0
+        self._current_stage.clear()
+        self._last_progress.clear()
         self.qc.start_processing(progress_callback=None)
 
     def _stop_processing(self):
@@ -333,21 +680,11 @@ class SourceQueueFrame(ttk.Frame):
         self.after(200, self._start_progress_checker)
 
     def _update_progress(self, stage, percent, item):
-        stage_names = {
-            "loading_source": "Загрузка источника",
-            "transcribing": "Транскрибация",
-            "extracting_metadata": "Извлечение метаданных",
-            "extracting_items": "Извлечение элементов",
-            "gap_audit": "Gap-аудит",
-            "building_topics": "Построение тем",
-            "generating_protocol": "Генерация протокола",
-            "fact_validation": "Фактологическая проверка",
-            "structure_validation": "Структурная проверка",
-            "rendering": "Рендеринг",
-            "publishing_confluence": "Публикация в Confluence",
-            "sending_telegram": "Отправка в Telegram",
-        }
-        stage_text = stage_names.get(stage, stage)
+        if item:
+            self._current_stage[item.item_id] = stage
+            self._last_progress[item.item_id] = percent
+
+        stage_text = self.STAGE_NAMES.get(stage, stage)
 
         if item and self.qc.batch_service.batch_run:
             batch = self.qc.batch_service.batch_run
@@ -364,19 +701,21 @@ class SourceQueueFrame(ttk.Frame):
             )
         else:
             self.current_progress["value"] = percent
+            if stage:
+                self.progress_label["text"] = stage_text
 
         self._update_eta()
         self._refresh_table()
 
     def _update_eta(self):
-        if hasattr(self, '_elapsed_start'):
+        if hasattr(self, '_elapsed_start') and self._elapsed_start:
             elapsed = (datetime.now() - self._elapsed_start).total_seconds()
             elapsed_str = str(datetime.utcfromtimestamp(int(elapsed)).strftime("%H:%M:%S"))
         else:
             elapsed_str = "00:00:00"
 
         items = self.qc.get_items()
-        pending = [i for i in items if i.status not in ("completed", "failed", "cancelled", "skipped")]
+        pending = [i for i in items if i.status not in ("completed", "failed", "cancelled", "skipped", "validation_failed")]
         estimate, eta_text = self.estimator.estimate_batch_remaining(pending)
 
         self.time_label["text"] = f"Прошло: {elapsed_str} | {eta_text}"
@@ -384,12 +723,43 @@ class SourceQueueFrame(ttk.Frame):
     def _on_batch_done(self):
         self.overall_progress["value"] = 100
         self.current_progress["value"] = 100
-        self.progress_label["text"] = "Обработка завершена"
-        self.stage_label["text"] = ""
         self.start_btn.configure(state=tk.NORMAL)
         self.stop_btn.configure(state=tk.DISABLED)
         self._refresh_table()
         self._save_state()
+
+        batch = self.qc.batch_service.batch_run
+        if batch:
+            completed = sum(1 for i in batch.items if i.status == "completed")
+            failed = sum(1 for i in batch.items if i.status == "failed")
+            cancelled = sum(1 for i in batch.items if i.status == "cancelled")
+            validation_failed = sum(1 for i in batch.items if i.status == "validation_failed")
+            skipped = sum(1 for i in batch.items if i.status == "skipped")
+            pending = sum(1 for i in batch.items if i.status == "pending")
+            total = len(batch.items)
+
+            status_names = {
+                "completed": "Завершена успешно",
+                "completed_with_errors": "Завершена с ошибками",
+                "failed": "Завершена с ошибкой",
+                "cancelled": "Отменена",
+                "nothing_to_process": "Нечего обрабатывать",
+            }
+            status_text = status_names.get(batch.status, batch.status)
+
+            summary = (
+                f"Обработка очереди: {status_text}\n\n"
+                f"Всего элементов: {total}\n"
+                f"Успешно: {completed}\n"
+                f"С ошибками: {failed}\n"
+                f"Валидация не пройдена: {validation_failed}\n"
+                f"Пропущено: {skipped}\n"
+                f"Отменено: {cancelled}\n"
+                f"Ожидает: {pending}"
+            )
+            self.progress_label["text"] = f"Обработка завершена — {status_text}"
+            self.stage_label["text"] = ""
+            messagebox.showinfo("Результат обработки", summary)
 
     def _save_state(self):
         self.qc.save_state()
