@@ -5,7 +5,7 @@ import settings
 from services.llm_providers import (
     LLMProvider,
     MockLLMProvider,
-    OneBitCLIProvider,
+    OneBitNewtonCLIProvider,
     OpenAICompatibleProvider,
 )
 
@@ -35,11 +35,14 @@ class LLMClient:
             self._provider = OpenAICompatibleProvider(
                 base_url=self.api_url, api_key=self.api_key, model=self.model,
                 models_path=models_path, chat_path=chat_path, timeout_seconds=timeout_seconds)
-        elif pt == "onebit_cli":
-            self._provider = OneBitCLIProvider(
+        elif pt == "onebit_newton_cli":
+            import os
+            self._provider = OneBitNewtonCLIProvider(
                 cli_path=cli_path or getattr(settings, 'ONEBIT_CLI_PATH', 'newton'),
                 transport=cli_transport or getattr(settings, 'ONEBIT_CLI_TRANSPORT', 'native'),
-                model=self.model, timeout_seconds=timeout_seconds)
+                model=self.model if self.model in ("llama", "gpt4") else "gpt4",
+                token=api_key or self.api_key or os.getenv("NEWTON_TOKEN", ""),
+                timeout_seconds=timeout_seconds)
         else:
             raise LLMConfigurationError(f"Unknown LLM provider: {pt}")
 

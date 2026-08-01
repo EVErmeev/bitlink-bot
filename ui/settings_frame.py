@@ -126,86 +126,197 @@ class SettingsFrame(ttk.Frame):
         frame = ttk.LabelFrame(self.scrollable, text="Нейросеть / LLM", padding=10)
         frame.pack(fill=tk.X, padx=10, pady=5)
 
-        ttk.Label(frame, text="Режим:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self._llm_mode_var = tk.StringVar(value="mock")
-        mode_combo = ttk.Combobox(frame, textvariable=self._llm_mode_var, state="readonly", width=20)
-        mode_combo["values"] = ["mock", "real"]
-        mode_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-        mode_combo.bind("<<ComboboxSelected>>", self._on_llm_mode_change)
+        ttk.Label(frame, text="Провайдер:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self._llm_provider_var = tk.StringVar(value="onebit_newton_cli")
+        provider_combo = ttk.Combobox(frame, textvariable=self._llm_provider_var, state="readonly", width=25)
+        provider_combo["values"] = ["mock", "onebit_newton_cli", "openai_compatible"]
+        provider_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        provider_combo.bind("<<ComboboxSelected>>", self._on_llm_provider_change)
 
-        ttk.Label(frame, text="Base URL:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        # ── Newton CLI fields (row 1-4) ──
+        ttk.Label(frame, text="Путь CLI:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self._llm_cli_path_entry = ttk.Entry(frame, width=50)
+        self._llm_cli_path_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame, text="Модель:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self._llm_cli_model_var = tk.StringVar(value="gpt4")
+        model_combo = ttk.Combobox(frame, textvariable=self._llm_cli_model_var, state="readonly", width=15)
+        model_combo["values"] = ["llama", "gpt4"]
+        model_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame, text="Таймаут (сек):").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self._llm_cli_timeout_entry = ttk.Entry(frame, width=10)
+        self._llm_cli_timeout_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+
+        self._llm_cli_btn_frame = ttk.Frame(frame)
+        self._llm_cli_btn_frame.grid(row=4, column=0, columnspan=3, pady=5, sticky=tk.W)
+        ttk.Button(self._llm_cli_btn_frame, text="Обнаружить CLI", command=self._discover_cli).pack(side=tk.LEFT, padx=3)
+        ttk.Button(self._llm_cli_btn_frame, text="Проверить CLI", command=self._check_cli).pack(side=tk.LEFT, padx=3)
+
+        # ── OpenAI fields (row 5-8) ──
+        ttk.Label(frame, text="Base URL:").grid(row=5, column=0, sticky=tk.W, pady=2)
         self._llm_url_entry = ttk.Entry(frame, width=50)
-        self._llm_url_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        self._llm_url_entry.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
 
-        ttk.Label(frame, text="API Key:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        ttk.Label(frame, text="API Key:").grid(row=6, column=0, sticky=tk.W, pady=2)
         self._llm_key_entry = ttk.Entry(frame, width=50, show="*")
-        self._llm_key_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        self._llm_key_entry.grid(row=6, column=1, sticky=tk.W, padx=5, pady=2)
 
         self._llm_show_key_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(frame, text="Показать API Key", variable=self._llm_show_key_var,
-                        command=self._toggle_llm_key_visibility).grid(row=2, column=2, sticky=tk.W, padx=5)
+                        command=self._toggle_llm_key_visibility).grid(row=6, column=2, sticky=tk.W, padx=5)
 
-        ttk.Label(frame, text="Model:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        ttk.Label(frame, text="Model:").grid(row=7, column=0, sticky=tk.W, pady=2)
         self._llm_model_entry = ttk.Entry(frame, width=50)
-        self._llm_model_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
-        self._llm_model_entry.insert(0, "gpt-4o")
+        self._llm_model_entry.grid(row=7, column=1, sticky=tk.W, padx=5, pady=2)
 
-        ttk.Label(frame, text="Статус:").grid(row=4, column=0, sticky=tk.W, pady=2)
+        # ── Status + button (row 8-9) ──
+        ttk.Label(frame, text="Статус:").grid(row=8, column=0, sticky=tk.W, pady=2)
         self._llm_status_label = ttk.Label(frame, text="Не проверено", foreground="gray")
-        self._llm_status_label.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+        self._llm_status_label.grid(row=8, column=1, sticky=tk.W, padx=5, pady=2)
 
         btn_frame = ttk.Frame(frame)
-        btn_frame.grid(row=5, column=0, columnspan=3, pady=5, sticky=tk.W)
+        btn_frame.grid(row=9, column=0, columnspan=3, pady=5, sticky=tk.W)
         ttk.Button(btn_frame, text="Проверить LLM", command=self._test_llm).pack(side=tk.LEFT, padx=3)
 
         self._llm_widgets = {
-            "mode": self._llm_mode_var, "url": self._llm_url_entry,
-            "key": self._llm_key_entry, "model": self._llm_model_entry,
+            "provider": self._llm_provider_var,
+            "cli_path": self._llm_cli_path_entry,
+            "cli_model": self._llm_cli_model_var,
+            "cli_timeout": self._llm_cli_timeout_entry,
+            "cli_btn_frame": self._llm_cli_btn_frame,
+            "url": self._llm_url_entry,
+            "key": self._llm_key_entry,
+            "model": self._llm_model_entry,
             "status": self._llm_status_label,
         }
 
-    def _on_llm_mode_change(self, event=None):
-        _ = self._llm_mode_var.get()
+        self._show_provider_fields("onebit_newton_cli")
+
+    def _show_provider_fields(self, provider):
+        is_openai = (provider == "openai_compatible")
+        is_newton = (provider == "onebit_newton_cli")
+        is_mock = (provider == "mock")
+
+        # Newton CLI fields
+        state_visible = tk.NORMAL if is_newton else tk.DISABLED
+        self._llm_cli_path_entry.configure(state=state_visible)
+        self._llm_cli_model_var.set("gpt4")
+        self._llm_cli_timeout_entry.configure(state=state_visible)
+        for child in self._llm_cli_btn_frame.winfo_children():
+            child.configure(state=state_visible)
+
+        # OpenAI fields
+        state_openai = tk.NORMAL if is_openai else tk.DISABLED
+        self._llm_url_entry.configure(state=state_openai)
+        self._llm_key_entry.configure(state=state_openai)
+        self._llm_model_entry.configure(state=state_openai)
+
+        if is_mock:
+            self._llm_status_label.configure(text="Mock — проверка не требуется", foreground="#cc6600")
+        else:
+            self._llm_status_label.configure(text="Не проверено", foreground="gray")
+
+    def _on_llm_provider_change(self, event=None):
+        p = self._llm_provider_var.get()
         self._llm_status_label.configure(text="Не проверено", foreground="gray")
+        self._show_provider_fields(p)
 
     def _toggle_llm_key_visibility(self):
         show = self._llm_show_key_var.get()
         self._llm_key_entry.configure(show="" if show else "*")
 
-    def _test_llm(self):
-        mode = self._llm_mode_var.get()
-        url = self._llm_url_entry.get().strip()
-        key = self._llm_key_entry.get().strip()
-        model = self._llm_model_entry.get().strip()
+    def _discover_cli(self):
+        import shutil
+        candidates = [
+            r"C:\Users\egore\AppData\Local\NewtonCLI\newton.cmd",
+            "newton.cmd",
+            "newton",
+        ]
+        for path in candidates:
+            resolved = shutil.which(path)
+            if resolved:
+                self._llm_cli_path_entry.delete(0, tk.END)
+                self._llm_cli_path_entry.insert(0, resolved)
+                self._llm_status_label.configure(text=f"Найден: {resolved}", foreground="green")
+                return
+        self._llm_status_label.configure(text="CLI не найден", foreground="red")
 
-        if mode == "mock":
+    def _check_cli(self):
+        path = self._llm_cli_path_entry.get().strip()
+        if not path:
+            self._llm_status_label.configure(text="Укажите путь CLI", foreground="red")
+            return
+        import os
+
+        from services.llm_providers import OneBitNewtonCLIProvider
+        token = os.getenv("NEWTON_TOKEN", "")
+        try:
+            timeout = int(self._llm_cli_timeout_entry.get().strip() or "15")
+        except ValueError:
+            timeout = 15
+        p = OneBitNewtonCLIProvider(cli_path=path, model="gpt4", token=token, timeout_seconds=timeout)
+        result = p.check_connection()
+        if result.ok:
+            self._llm_status_label.configure(text=result.safe_message, foreground="green")
+        else:
+            self._llm_status_label.configure(text=result.safe_message, foreground="red")
+
+    def _test_llm(self):
+        pt = self._llm_provider_var.get()
+
+        if pt == "mock":
             self._llm_status_label.configure(text="Mock — проверка не требуется", foreground="#cc6600")
             return
 
-        if not url or not key:
-            self._llm_status_label.configure(text="Ошибка: укажите Base URL и API Key", foreground="red")
+        if pt == "onebit_newton_cli":
+            import os
+
+            from services.llm_providers import OneBitNewtonCLIProvider
+            path = self._llm_cli_path_entry.get().strip()
+            model = self._llm_cli_model_var.get()
+            token = os.getenv("NEWTON_TOKEN", "")
+            try:
+                timeout = int(self._llm_cli_timeout_entry.get().strip() or "120")
+            except ValueError:
+                timeout = 120
+            p = OneBitNewtonCLIProvider(cli_path=path, model=model, token=token, timeout_seconds=timeout)
+            result = p.check_connection()
+            if result.ok:
+                self._llm_status_label.configure(text=result.safe_message, foreground="green")
+            else:
+                self._llm_status_label.configure(text=result.safe_message, foreground="red")
             return
 
-        from services.llm_service import LLMClient
-        try:
-            client = LLMClient(api_url=url, api_key=key, model=model, mock_mode=False)
-            conn = client.check_connection()
-            if not conn:
-                self._llm_status_label.configure(text="Ошибка: нет соединения с API", foreground="red")
+        if pt == "openai_compatible":
+            url = self._llm_url_entry.get().strip()
+            key = self._llm_key_entry.get().strip()
+            model = self._llm_model_entry.get().strip()
+
+            if not url or not key:
+                self._llm_status_label.configure(text="Ошибка: укажите Base URL и API Key", foreground="red")
                 return
 
-            smoke_schema = {"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}
-            result, raw = client.generate_json(
-                system_prompt="Return JSON with status: ok",
-                user_prompt="Return {\"status\": \"ok\"}",
-                json_schema=smoke_schema,
-            )
-            if result.get("status") == "ok":
-                self._llm_status_label.configure(text=f"OK — модель: {model}", foreground="green")
-            else:
-                self._llm_status_label.configure(text=f"OK, но ответ: {result}", foreground="#cc6600")
-        except Exception as e:
-            self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
+            from services.llm_service import LLMClient
+            try:
+                client = LLMClient(api_url=url, api_key=key, model=model, mock_mode=False)
+                conn = client.check_connection()
+                if not conn:
+                    self._llm_status_label.configure(text="Ошибка: нет соединения с API", foreground="red")
+                    return
+
+                smoke_schema = {"type": "object", "properties": {"status": {"type": "string"}}, "required": ["status"]}
+                result, raw = client.generate_json(
+                    system_prompt="Return JSON with status: ok",
+                    user_prompt="Return {\"status\": \"ok\"}",
+                    json_schema=smoke_schema,
+                )
+                if result.get("status") == "ok":
+                    self._llm_status_label.configure(text=f"OK — модель: {model}", foreground="green")
+                else:
+                    self._llm_status_label.configure(text=f"OK, но ответ: {result}", foreground="#cc6600")
+            except Exception as e:
+                self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
 
     def _load_settings(self):
         load_dotenv(self.env_path)
@@ -231,13 +342,19 @@ class SettingsFrame(ttk.Frame):
         self._mode_var.set(os.getenv("PROTOCOL_MODE", "auto"))
         self._continue_var.set(os.getenv("BATCH_CONTINUE_AFTER_ERROR", "true").lower() in ("true", "1", "yes"))
 
-        self._llm_mode_var.set(os.getenv("LLM_MOCK", "true").lower() in ("true", "1", "yes") and "mock" or "real")
+        self._llm_provider_var.set(os.getenv("LLM_PROVIDER", "onebit_newton_cli"))
+        self._llm_cli_path_entry.delete(0, tk.END)
+        self._llm_cli_path_entry.insert(0, os.getenv("ONEBIT_CLI_PATH", r"C:\Users\egore\AppData\Local\NewtonCLI\newton.cmd"))
+        self._llm_cli_model_var.set(os.getenv("LLM_MODEL", "gpt4"))
+        self._llm_cli_timeout_entry.delete(0, tk.END)
+        self._llm_cli_timeout_entry.insert(0, os.getenv("ONEBIT_CLI_TIMEOUT_SECONDS", "120"))
         self._llm_url_entry.delete(0, tk.END)
         self._llm_url_entry.insert(0, os.getenv("LLM_API_URL", ""))
         self._llm_key_entry.delete(0, tk.END)
         self._llm_key_entry.insert(0, os.getenv("LLM_API_KEY", ""))
         self._llm_model_entry.delete(0, tk.END)
-        self._llm_model_entry.insert(0, os.getenv("LLM_MODEL", "gpt-4o"))
+        self._llm_model_entry.insert(0, os.getenv("LLM_MODEL", "gpt4"))
+        self._show_provider_fields(self._llm_provider_var.get())
 
     def _save_settings(self):
         bitlink_e = self._block_entries.get("бит_link", {})
@@ -261,10 +378,14 @@ class SettingsFrame(ttk.Frame):
             "PROTOCOL_TEMPLATE": self._template_var.get(),
             "PROTOCOL_MODE": self._mode_var.get(),
             "BATCH_CONTINUE_AFTER_ERROR": str(self._continue_var.get()).lower(),
-            "LLM_MOCK": "true" if self._llm_mode_var.get() == "mock" else "false",
+            "LLM_PROVIDER": self._llm_provider_var.get(),
+            "LLM_MOCK": "true" if self._llm_provider_var.get() == "mock" else "false",
             "LLM_API_URL": self._llm_url_entry.get(),
             "LLM_API_KEY": self._llm_key_entry.get(),
-            "LLM_MODEL": self._llm_model_entry.get(),
+            "LLM_MODEL": self._llm_model_entry.get() or self._llm_cli_model_var.get(),
+            "ONEBIT_CLI_PATH": self._llm_cli_path_entry.get(),
+            "ONEBIT_CLI_TRANSPORT": "native",
+            "ONEBIT_CLI_TIMEOUT_SECONDS": self._llm_cli_timeout_entry.get(),
         }
 
         for key, value in env_map.items():

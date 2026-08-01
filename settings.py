@@ -60,10 +60,14 @@ TELEGRAM_SEND_BATCH_SUMMARY: bool = _bool("TELEGRAM_SEND_BATCH_SUMMARY", True)
 TELEGRAM_MOCK: bool = _bool("TELEGRAM_MOCK", True)
 
 # ── LLM ──
+LLM_PROVIDER: str = _str("LLM_PROVIDER", "mock")
 LLM_MOCK: bool = _bool("LLM_MOCK", True)
 LLM_API_URL: str = _str("LLM_API_URL")
 LLM_API_KEY: str = _str("LLM_API_KEY")
 LLM_MODEL: str = _str("LLM_MODEL", "gpt-4o")
+ONEBIT_CLI_PATH: str = _str("ONEBIT_CLI_PATH", "C:\\Users\\egore\\AppData\\Local\\NewtonCLI\\newton.cmd")
+ONEBIT_CLI_TRANSPORT: str = _str("ONEBIT_CLI_TRANSPORT", "native")
+ONEBIT_CLI_TIMEOUT_SECONDS: int = int(_str("ONEBIT_CLI_TIMEOUT_SECONDS", "120"))
 
 # ── Protocol ──
 PROTOCOL_TEMPLATE: str = _str("PROTOCOL_TEMPLATE", "project_detailed")

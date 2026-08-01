@@ -1,7 +1,9 @@
 """LLM provider abstraction layer."""
 import json
+import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -102,51 +104,77 @@ class OpenAICompatibleProvider:
         return data["choices"][0]["message"]["content"]
 
 
-class OneBitCLIProvider:
-    def __init__(self, cli_path="newton", transport="native", model="",
-                 timeout_seconds=120):
+class OneBitNewtonCLIProvider:
+    def __init__(self, cli_path="C:\\Users\\egore\\AppData\\Local\\NewtonCLI\\newton.cmd",
+                 transport="native", model="gpt4", token="", timeout_seconds=120):
         self.cli_path = cli_path
-        self.transport = transport  # native | wsl
+        self.transport = transport
+        if model not in ("llama", "gpt4"):
+            model = "gpt4"
         self.model = model
+        self.token = token
         self.timeout_seconds = timeout_seconds
 
     def check_connection(self) -> ConnectionCheckResult:
         try:
-            args = self._build_args(["--version"])
-            result = subprocess.run(args, capture_output=True, text=True,
-                                   timeout=min(15, self.timeout_seconds), shell=False)
+            args = [self.cli_path, "version"]
+            result = subprocess.run(args, capture_output=True, text=True, timeout=15, shell=False)
             if result.returncode == 0:
                 return ConnectionCheckResult(ok=True, stage="cli_version",
-                    safe_message=f"CLI обнаружен: {result.stdout.strip()[:200]}")
+                    safe_message=f"Newton CLI {result.stdout.strip()[:100]}")
             return ConnectionCheckResult(ok=False, stage="cli_version",
-                safe_message=f"CLI вернул код {result.returncode}: {result.stderr[:200]}")
+                safe_message=f"CLI exit code {result.returncode}: {result.stderr[:200]}")
         except FileNotFoundError:
             return ConnectionCheckResult(ok=False, stage="cli_path",
-                safe_message=f"CLI не найден по пути: {self.cli_path}. Установите newton CLI.")
+                safe_message=f"CLI not found: {self.cli_path}")
         except Exception as e:
-            return ConnectionCheckResult(ok=False, stage="cli_error",
-                safe_message=f"Ошибка CLI: {str(e)[:200]}")
-
-    def _build_args(self, extra_args: list[str]) -> list[str]:
-        if self.transport == "wsl":
-            return ["wsl.exe"] + [self.cli_path] + extra_args
-        return [self.cli_path] + extra_args
+            return ConnectionCheckResult(ok=False, stage="cli_error", safe_message=str(e)[:200])
 
     def generate(self, system_prompt, user_prompt, *, model="", temperature=0.1, max_tokens=4096):
-        combined_prompt = f"System: {system_prompt}\n\nUser: {user_prompt}"
-        args = self._build_args(["--model", model or self.model or "default"])
-        result = subprocess.run(args, input=combined_prompt, capture_output=True,
-                               text=True, timeout=self.timeout_seconds, shell=False,
-                               encoding="utf-8")
-        if result.returncode != 0:
-            raise RuntimeError(f"CLI exited with code {result.returncode}: {result.stderr[:300]}")
-        output = result.stdout
-        json_blocks = re.findall(r'```(?:json)?\s*\n?(.*?)```', output, re.DOTALL)
-        if len(json_blocks) == 1:
-            return json_blocks[0].strip()
-        if len(json_blocks) > 1:
-            raise RuntimeError("CLI returned multiple JSON code blocks — expected single valid JSON object.")
-        stripped = output.strip()
-        if stripped.startswith("{") and stripped.endswith("}"):
-            return stripped
-        raise RuntimeError(f"CLI output is not valid JSON: {stripped[:300]}")
+        mdl = model if model in ("llama", "gpt4") else self.model
+
+        fd, output_path = tempfile.mkstemp(suffix=".json", prefix="newton_out_")
+        os.close(fd)
+
+        try:
+            args = [
+                self.cli_path, "summarize", "-",
+                "--model", mdl,
+                "--system-prompt", system_prompt,
+                "--output", output_path,
+            ]
+            if user_prompt:
+                args.extend(["--user-prompt", user_prompt])
+
+            env = os.environ.copy()
+            if self.token:
+                env["NEWTON_TOKEN"] = self.token
+
+            result = subprocess.run(args, input=system_prompt + "\n" + user_prompt,
+                                   capture_output=True, text=True, shell=False,
+                                   timeout=self.timeout_seconds, env=env, encoding="utf-8")
+
+            if result.returncode != 0:
+                raise RuntimeError(f"Newton CLI exit {result.returncode}: {result.stderr[:300]}")
+
+            with open(output_path, encoding="utf-8") as f:
+                output = f.read().strip()
+
+            if not output:
+                raise RuntimeError("Newton CLI produced empty output")
+
+            fences = re.findall(r'```(?:json)?\s*\n?(.*?)```', output, re.DOTALL)
+            if len(fences) == 1:
+                return fences[0].strip()
+            if len(fences) > 1:
+                return max(fences, key=len).strip()
+
+            stripped = output.strip()
+            if stripped.startswith("{"):
+                return stripped
+            raise RuntimeError(f"Output is not JSON: {stripped[:300]}")
+        finally:
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass

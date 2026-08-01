@@ -47,4 +47,4 @@ def build_llm_client(config: RuntimeConfig):
         return LLMClient(mock_mode=True, provider_type="mock")
     return LLMClient(api_url=config.llm_api_url, api_key=config.llm_api_key,
                      model=config.llm_model, mock_mode=False,
-                     provider_type=getattr(config, 'llm_provider', 'openai_compatible'))
+                     provider_type=getattr(config, 'llm_provider', 'onebit_newton_cli'))

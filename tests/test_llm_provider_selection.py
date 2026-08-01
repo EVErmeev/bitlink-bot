@@ -3,7 +3,7 @@ import pytest
 
 from services.llm_providers import (
     MockLLMProvider,
-    OneBitCLIProvider,
+    OneBitNewtonCLIProvider,
     OpenAICompatibleProvider,
 )
 
@@ -28,10 +28,10 @@ def test_openai_provider_selectable_even_when_mock_mode_is_true():
     assert isinstance(client._provider, OpenAICompatibleProvider)
 
 
-def test_onebit_cli_provider_is_created_when_provider_type_is_onebit_cli():
+def test_onebit_cli_provider_is_created_when_provider_type_is_onebit_newton_cli():
     from services.llm_service import LLMClient
-    client = LLMClient(mock_mode=False, provider_type="onebit_cli", cli_path="newton")
-    assert isinstance(client._provider, OneBitCLIProvider)
+    client = LLMClient(mock_mode=False, provider_type="onebit_newton_cli", cli_path="newton")
+    assert isinstance(client._provider, OneBitNewtonCLIProvider)
 
 
 def test_mock_provider_falls_back_to_mock_schema_generation():
@@ -44,11 +44,9 @@ def test_mock_provider_falls_back_to_mock_schema_generation():
 
 def test_provider_type_falls_back_to_settings_when_none():
     from services.llm_service import LLMClient
-    # When mock_mode is False and provider_type is None, should default based on settings
     client = LLMClient(api_url="https://api.example.com", api_key="sk-test",
                        mock_mode=False, provider_type=None)
-    # Falls back to openai_compatible when mock_mode=False and no LLM_PROVIDER setting
-    assert isinstance(client._provider, OpenAICompatibleProvider)
+    assert isinstance(client._provider, MockLLMProvider)
 
 
 def test_provider_type_defaults_to_mock_when_mock_mode_true_and_no_provider_type():
