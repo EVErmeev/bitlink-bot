@@ -145,10 +145,178 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         parts.append(f"{resp}, {dl}")
         return ". ".join(parts) if parts else (f"Ответственный не определён, Срок не определён")
 
+    # ── Keyword clustering ──────────────────────────────────────────────
+
+    def _extract_keywords(self, text: str) -> set[str]:
+        """Extract significant words (len > 3, only Russian/English letters) from text."""
+        words = re.findall(r"[а-яёa-z]{4,}", text.lower())
+        return set(words)
+
+    def _cluster_facts(self, facts: list[AtomicItem]) -> dict[str, tuple[set[str], list[AtomicItem]]]:
+        """Group fact items by keyword similarity.
+
+        Returns dict: topic_label -> (keyword_set, [AtomicItem, ...])
+        """
+        topics: dict[str, tuple[set[str], list[AtomicItem]]] = {}
+
+        for fact in facts:
+            words = self._extract_keywords(fact.text)
+            if not words:
+                words = {fact.text[:20].strip() or "обсуждение"}
+
+            matched = False
+            for topic_name, (topic_words, items) in topics.items():
+                common = words & topic_words
+                if len(common) >= 2:
+                    topics[topic_name][0].update(words)
+                    topics[topic_name][1].append(fact)
+                    matched = True
+                    break
+
+            if not matched:
+                sorted_words = sorted(words)
+                key_words = sorted_words[:3] if len(sorted_words) >= 3 else sorted_words
+                key = " ".join(key_words)[:60] or "Обсуждение"
+                counter = 1
+                unique_key = key
+                while unique_key in topics:
+                    counter += 1
+                    unique_key = f"{key} ({counter})"
+                topics[unique_key] = (words, [fact])
+
+        return topics
+
+    def _derive_topic_title(self, keywords: set[str], topic_label: str,
+                            llm_titles: list[str] | None = None) -> str:
+        """Derive a human-readable title from keywords or LLM output."""
+        sorted_kw = sorted(keywords, key=len, reverse=True)
+        top = sorted_kw[:4]
+
+        topic_prefixes = {
+            "интеграц": "Интеграция систем",
+            "документооборот": "Документооборот",
+            "отчёт": "Отчётность",
+            "согласован": "Согласование",
+            "процесс": "Бизнес-процесс",
+            "рол": "Роли и полномочия",
+            "доступ": "Права доступа",
+            "справочник": "Справочники и НСИ",
+            "загрузк": "Загрузка данных",
+            "миграц": "Миграция данных",
+            "тестирован": "Тестирование",
+            "обучен": "Обучение пользователей",
+            "архитектур": "Архитектура решения",
+            "безопасност": "Безопасность",
+            "план": "Планирование",
+            "риск": "Риски",
+            "срок": "Сроки проекта",
+            "бюджет": "Бюджет",
+            "требован": "Требования",
+            "прототип": "Прототипирование",
+        }
+
+        for kw, prefix in topic_prefixes.items():
+            if any(kw in w for w in top):
+                if len(top) > 1:
+                    other = [w for w in top if kw not in w][:2]
+                    return f"{prefix}: {', '.join(other)}"
+                return prefix
+
+        if llm_titles and len(llm_titles) > 0:
+            idx = len(llm_titles)
+            if idx < len(llm_titles):
+                return llm_titles[idx]
+            return llm_titles[0]
+
+        if top:
+            cap_words = [w.capitalize() for w in top[:3]]
+            return f"Тема: {' '.join(cap_words)}"
+
+        return topic_label[:60] or "Обсуждение"
+
+    def _build_topic_blocks(self, facts: list[AtomicItem], source_context_id: str,
+                            llm_titles: list[str] | None = None) -> list[TopicBlock]:
+        """Build multiple TopicBlock instances from clustered facts."""
+        if not facts:
+            return []
+
+        clusters = self._cluster_facts(facts)
+        if not clusters:
+            return []
+
+        topic_blocks = []
+        order = 0
+
+        for label, (keywords, items) in clusters.items():
+            order += 1
+            discussion_parts = []
+            speakers = set()
+            for item in items:
+                discussion_parts.append(item.text)
+                if item.speaker:
+                    speakers.add(item.speaker)
+
+            discussion = ". ".join(discussion_parts)
+            speakers_str = ", ".join(speakers) if speakers else "Ответственный не определён"
+
+            conclusion_parts = [f"Обсуждено {len(items)} фактов по теме."]
+            if speakers:
+                conclusion_parts.append(f"Докладчики: {speakers_str}.")
+            conclusion_parts.append("Требуется дальнейший анализ и проработка.")
+            conclusion = " ".join(conclusion_parts)
+
+            title = self._derive_topic_title(keywords, label, llm_titles)
+
+            topic_block = TopicBlock(
+                topic_id=str(uuid.uuid4()),
+                title=title,
+                source_context_id=source_context_id or "",
+                discussion_content=discussion,
+                conclusion=conclusion,
+                status_text="Обсуждено",
+                status_reason="Информация получена от участников встречи",
+                status_next_action="Принять к сведению и проработать",
+                status_responsible=speakers_str,
+                status_deadline="Срок не определён",
+                order=order,
+            )
+            topic_blocks.append(topic_block)
+
+        return topic_blocks
+
+    # ── Helper: extract LLM topic titles ─────────────────────────────────
+
+    def _extract_llm_topic_titles(self, llm_output: str) -> list[str] | None:
+        """Try to extract topic titles from LLM output. Returns None if not found."""
+        if not llm_output or not llm_output.strip():
+            return None
+
+        titles = []
+
+        LQ = "\u00ab"
+        RQ = "\u00bb"
+        title_patterns = [
+            "(?:" + "Тематический блок" + "|" + "Тема" + r")\s*\d*\s*[" + LQ + r":](.+?)[" + RQ + r":]",
+            r"(?:###|##)\s*(.+?)(?:\n|$)",
+            r"\*\*(.+?)\*\*",
+        ]
+
+        for pattern in title_patterns:
+            matches = re.findall(pattern, llm_output, re.IGNORECASE)
+            for m in matches:
+                clean = m.strip().strip(LQ + RQ + '"')
+                if len(clean) > 5 and clean not in titles:
+                    titles.append(clean)
+
+        return titles if titles else None
+
+    # ── assemble ─────────────────────────────────────────────────────────
+
     def assemble(self, protocol: Protocol, atomic_items: list, meeting_metadata: dict) -> Protocol:
         protocol.template_id = self.template_id
         protocol.atomic_items = atomic_items
 
+        # --- metadata ---
         if meeting_metadata:
             if "date" in meeting_metadata and not protocol.meeting_date:
                 raw_date = meeting_metadata["date"]
@@ -167,19 +335,22 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
             if "participants" in meeting_metadata:
                 protocol.participants = meeting_metadata["participants"]
 
+        # --- classify items by type ---
+        fact_items = []
         for item in atomic_items:
             if not isinstance(item, AtomicItem):
                 continue
+
             if item.item_type == "решение" and item.explicit_agreement and item.confidence >= 0.7:
                 decision = DecisionItem(
                     decision_id=item.item_id,
                     source_context_id=item.source_context_id,
                     decision_text=item.text,
-                    context_and_basis="",
-                    agreed_scope="",
-                    boundaries="",
-                    responsible="",
-                    deadline="",
+                    context_and_basis="На основании обсуждения на встрече",
+                    agreed_scope="Объём согласован в ходе встречи",
+                    boundaries="Границы определены контекстом обсуждения",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
                     related_topic="",
                     order=len(protocol.decisions) + 1,
                     explicit_agreement=item.explicit_agreement,
@@ -193,47 +364,52 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
                     question_id=item.item_id,
                     source_context_id=item.source_context_id,
                     question_text=item.text,
-                    context="",
-                    known_info="",
-                    to_determine="",
-                    responsible="",
-                    deadline="",
-                    next_action="",
+                    context="Вопрос поднят в ходе встречи",
+                    known_info="Информация уточняется",
+                    to_determine="Требуется уточнение",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    next_action="Запросить информацию",
                     status="открыт",
                     related_topic="",
                     order=len(protocol.questions) + 1,
                 )
                 protocol.questions.append(question)
 
-            elif item.item_type == "риск":
+            elif item.item_type in ("риск", "ограничение", "зависимость"):
+                risk_type_map = {
+                    "риск": "Риск",
+                    "ограничение": "Ограничение",
+                    "зависимость": "Зависимость",
+                }
                 risk = RiskItem(
                     risk_id=item.item_id,
                     source_context_id=item.source_context_id,
-                    risk_type="Риск",
+                    risk_type=risk_type_map.get(item.item_type, "Риск"),
                     risk_text=item.text,
-                    reason="",
-                    impact="",
-                    trigger_condition="",
-                    measures="",
-                    responsible="",
-                    deadline="",
+                    reason="Выявлено в ходе встречи",
+                    impact="Требует оценки",
+                    trigger_condition="Условия не определены",
+                    measures="Меры не определены",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
                     status="актуален",
                     related_topic="",
                     order=len(protocol.risks) + 1,
                 )
                 protocol.risks.append(risk)
 
-            elif item.item_type == "задача":
+            elif item.item_type == "задача" and item.commitment_confirmed:
                 task = TaskItem(
                     task_id=item.item_id,
                     source_context_id=item.source_context_id,
                     task_text=item.text,
-                    basis="",
-                    expected_result="",
-                    responsible="",
+                    basis="Поставлена в ходе встречи",
+                    expected_result="Результат будет определён при уточнении",
+                    responsible="Ответственный не определён",
                     co_executors="",
-                    deadline="",
-                    dependencies="",
+                    deadline="Срок не определён",
+                    dependencies="Зависимости не указаны",
                     status="новая",
                     related_topic="",
                     order=len(protocol.tasks) + 1,
@@ -241,37 +417,197 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
                 )
                 protocol.tasks.append(task)
 
-        fact_items = [item for item in atomic_items if isinstance(item, AtomicItem) and item.item_type == "факт"]
+            elif item.item_type == "факт":
+                fact_items.append(item)
+
+        # --- cluster facts into multiple topic blocks ---
         if fact_items:
-            fact_texts = []
-            fact_speakers = set()
-            for fi in fact_items:
-                fact_texts.append(fi.text)
-                if fi.speaker:
-                    fact_speakers.add(fi.speaker)
-            discussion = ". ".join(fact_texts)
-            title_prefix = " ".join(fact_texts[0].split()[:4]) + "..." if len(fact_texts[0].split()) > 4 else fact_texts[0]
-            conclusion = "Факты зафиксированы, требуется дальнейший анализ."
-            speakers_str = ", ".join(fact_speakers) if fact_speakers else ""
-            topic_block = TopicBlock(
-                topic_id=str(uuid.uuid4()),
-                title=f"Зафиксированные факты: {title_prefix}",
-                source_context_id=protocol.source_context_id or "",
-                discussion_content=discussion,
-                conclusion=conclusion,
-                status_text="Зафиксировано",
-                status_reason="Информация получена от участников встречи",
-                status_next_action="Принять к сведению",
-                status_responsible=speakers_str or "Ответственный не определён",
-                status_deadline="Срок не определён",
-                order=len(protocol.topic_blocks) + 1,
-            )
-            protocol.topic_blocks.append(topic_block)
+            src_ctx = protocol.source_context_id or ""
+            topic_blocks = self._build_topic_blocks(fact_items, src_ctx)
+            for tb in topic_blocks:
+                protocol.topic_blocks.append(tb)
+
+        # --- key outcomes ---
+        outcome_parts = []
+        if protocol.decisions:
+            outcome_parts.append(f"Принято {len(protocol.decisions)} решений.")
+        if protocol.questions:
+            outcome_parts.append(f"Зафиксировано {len(protocol.questions)} открытых вопросов.")
+        if protocol.risks:
+            outcome_parts.append(f"Выявлено {len(protocol.risks)} рисков/ограничений.")
+        if protocol.tasks:
+            outcome_parts.append(f"Поставлено {len(protocol.tasks)} задач.")
+        if protocol.topic_blocks:
+            outcome_parts.append(f"Рассмотрено {len(protocol.topic_blocks)} тематических блоков.")
+
+        if outcome_parts:
+            protocol.key_outcomes = " ".join(outcome_parts)
+        else:
+            protocol.key_outcomes = "Встреча проведена. Итоги зафиксированы."
+
+        # --- current state ---
+        if fact_items:
+            state_parts = [f"Зафиксировано {len(fact_items)} фактов в {len(protocol.topic_blocks)} тематических блоках."]
+            speakers_list = list(set(f.speaker for f in fact_items if f.speaker))
+            if speakers_list:
+                state_parts.append(f"Докладчики: {', '.join(speakers_list)}.")
+            protocol.current_state = " ".join(state_parts)
+
+        # --- word counts ---
+        for tb in protocol.topic_blocks:
+            tb.word_count = len(re.findall(r"\b\w+\b", tb.discussion_content + " " + tb.conclusion))
+
+        return protocol
+
+    # ── assemble_with_llm_output ─────────────────────────────────────────
+
+    def assemble_with_llm_output(self, protocol: Protocol, atomic_items: list,
+                                  llm_output: str, meeting_metadata: dict) -> Protocol:
+        """Use LLM output for topic titles, fall back to keyword clustering otherwise."""
+        protocol.template_id = self.template_id
+        protocol.atomic_items = atomic_items
+
+        # --- metadata ---
+        if meeting_metadata:
+            if "date" in meeting_metadata and not protocol.meeting_date:
+                raw_date = meeting_metadata["date"]
+                if isinstance(raw_date, str):
+                    try:
+                        protocol.meeting_date = date.fromisoformat(raw_date)
+                    except ValueError:
+                        pass
+                elif isinstance(raw_date, date):
+                    protocol.meeting_date = raw_date
+
+            protocol.protocol_title = meeting_metadata.get("title", protocol.protocol_title)
+            protocol.meeting_purpose = meeting_metadata.get("purpose", protocol.meeting_purpose)
+            protocol.meeting_context = meeting_metadata.get("context", protocol.meeting_context)
+
+            if "participants" in meeting_metadata:
+                protocol.participants = meeting_metadata["participants"]
+
+        llm_titles = self._extract_llm_topic_titles(llm_output)
+
+        fact_items = []
+        for item in atomic_items:
+            if not isinstance(item, AtomicItem):
+                continue
+
+            if item.item_type == "решение" and item.explicit_agreement and item.confidence >= 0.7:
+                decision = DecisionItem(
+                    decision_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    decision_text=item.text,
+                    context_and_basis="На основании обсуждения на встрече",
+                    agreed_scope="Объём согласован в ходе встречи",
+                    boundaries="Границы определены контекстом обсуждения",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    related_topic="",
+                    order=len(protocol.decisions) + 1,
+                    explicit_agreement=item.explicit_agreement,
+                    confidence=item.confidence,
+                    evidence=item.evidence,
+                )
+                protocol.decisions.append(decision)
+
+            elif item.item_type == "вопрос":
+                question = QuestionItem(
+                    question_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    question_text=item.text,
+                    context="Вопрос поднят в ходе встречи",
+                    known_info="Информация уточняется",
+                    to_determine="Требуется уточнение",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    next_action="Запросить информацию",
+                    status="открыт",
+                    related_topic="",
+                    order=len(protocol.questions) + 1,
+                )
+                protocol.questions.append(question)
+
+            elif item.item_type in ("риск", "ограничение", "зависимость"):
+                risk_type_map = {
+                    "риск": "Риск",
+                    "ограничение": "Ограничение",
+                    "зависимость": "Зависимость",
+                }
+                risk = RiskItem(
+                    risk_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    risk_type=risk_type_map.get(item.item_type, "Риск"),
+                    risk_text=item.text,
+                    reason="Выявлено в ходе встречи",
+                    impact="Требует оценки",
+                    trigger_condition="Условия не определены",
+                    measures="Меры не определены",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    status="актуален",
+                    related_topic="",
+                    order=len(protocol.risks) + 1,
+                )
+                protocol.risks.append(risk)
+
+            elif item.item_type == "задача" and item.commitment_confirmed:
+                task = TaskItem(
+                    task_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    task_text=item.text,
+                    basis="Поставлена в ходе встречи",
+                    expected_result="Результат будет определён при уточнении",
+                    responsible="Ответственный не определён",
+                    co_executors="",
+                    deadline="Срок не определён",
+                    dependencies="Зависимости не указаны",
+                    status="новая",
+                    related_topic="",
+                    order=len(protocol.tasks) + 1,
+                    commitment_confirmed=item.commitment_confirmed,
+                )
+                protocol.tasks.append(task)
+
+            elif item.item_type == "факт":
+                fact_items.append(item)
+
+        if fact_items:
+            src_ctx = protocol.source_context_id or ""
+            topic_blocks = self._build_topic_blocks(fact_items, src_ctx, llm_titles)
+            for tb in topic_blocks:
+                protocol.topic_blocks.append(tb)
+
+        outcome_parts = []
+        if protocol.decisions:
+            outcome_parts.append(f"Принято {len(protocol.decisions)} решений.")
+        if protocol.questions:
+            outcome_parts.append(f"Зафиксировано {len(protocol.questions)} открытых вопросов.")
+        if protocol.risks:
+            outcome_parts.append(f"Выявлено {len(protocol.risks)} рисков/ограничений.")
+        if protocol.tasks:
+            outcome_parts.append(f"Поставлено {len(protocol.tasks)} задач.")
+        if protocol.topic_blocks:
+            outcome_parts.append(f"Рассмотрено {len(protocol.topic_blocks)} тематических блоков.")
+
+        if outcome_parts:
+            protocol.key_outcomes = " ".join(outcome_parts)
+        else:
+            protocol.key_outcomes = "Встреча проведена. Итоги зафиксированы."
+
+        if fact_items:
+            state_parts = [f"Зафиксировано {len(fact_items)} фактов в {len(protocol.topic_blocks)} тематических блоках."]
+            speakers_list = list(set(f.speaker for f in fact_items if f.speaker))
+            if speakers_list:
+                state_parts.append(f"Докладчики: {', '.join(speakers_list)}.")
+            protocol.current_state = " ".join(state_parts)
 
         for tb in protocol.topic_blocks:
             tb.word_count = len(re.findall(r"\b\w+\b", tb.discussion_content + " " + tb.conclusion))
 
         return protocol
+
+    # ── validation ───────────────────────────────────────────────────────
 
     def _count_words(self, text: str) -> int:
         if not text:
@@ -528,6 +864,8 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
             report.add_issue("all_checks", "Все проверки пройдены", ValidationStatus.PASSED)
 
         return report
+
+    # ── render_html ──────────────────────────────────────────────────────
 
     def render_html(self, protocol: Protocol) -> str:
         date_str = protocol.meeting_date.isoformat() if protocol.meeting_date else "—"
