@@ -77,6 +77,10 @@ class ProcessingService:
             if not transcript_text:
                 raise Exception("Failed to obtain transcript")
 
+            if not item.source_sha256:
+                from meeting_metadata import compute_sha256_from_bytes
+                item.source_sha256 = compute_sha256_from_bytes(transcript_text.encode("utf-8"))
+
             self._report_progress("extracting_metadata", 15, item)
             meeting_date, meeting_time = determine_meeting_date(
                 filepath=item.source_path,
@@ -84,7 +88,9 @@ class ProcessingService:
 
             self._report_progress("extracting_items", 25, item)
             source_ctx_id = item.source_context_id or generate_source_context_id(
-                str(item.source_path) if item.source_path else item.bitlink_recording_id
+                source_path=str(item.source_path) if item.source_path else None,
+                bitlink_recording_id=item.bitlink_recording_id,
+                source_sha256=item.source_sha256,
             )
             atomic_items = extract_atomic_items(
                 transcript_text, source_ctx_id, item.source_sha256 or ""
@@ -137,14 +143,15 @@ class ProcessingService:
             self._report_progress("fact_validation", 70, item)
             fact_report = validate_facts(protocol, transcript_text)
             protocol = apply_corrections(protocol)
-            protocol.fact_validation_passed = fact_report.passed
 
-            source_report = validate_source_alignment(protocol, source_ctx_id)
-            protocol.source_alignment_passed = source_report.passed
+            self._report_progress("fact_validation", 72, item)
+            post_correction_fact_report = validate_facts(protocol, transcript_text)
+            post_correction_source_report = validate_source_alignment(protocol, source_ctx_id)
+            post_correction_struct_report = template.validate(protocol)
 
-            self._report_progress("structure_validation", 80, item)
-            struct_report = template.validate(protocol)
-            protocol.structure_validation_passed = struct_report.passed
+            protocol.fact_validation_passed = post_correction_fact_report.passed
+            protocol.source_alignment_passed = post_correction_source_report.passed
+            protocol.structure_validation_passed = post_correction_struct_report.passed
 
             self._report_progress("rendering", 85, item)
             html = template.render_html(protocol)
@@ -162,7 +169,7 @@ class ProcessingService:
             if item.debug_directory:
                 self._save_artifacts(item.debug_directory, protocol, html, transcript_text)
 
-            if publishable:
+            if publishable and not item.dry_run:
                 self._report_progress("publishing_confluence", 90, item)
                 try:
                     parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
@@ -201,8 +208,20 @@ class ProcessingService:
             else:
                 result["error"] = "Protocol validation failed - publication blocked"
 
-            item.status = "completed" if (result["url"] or not publishable) else "failed"
-            result["success"] = item.status == "completed"
+            if publishable and result["url"]:
+                item.status = "completed"
+                result["success"] = True
+            elif publishable and item.dry_run:
+                item.status = "completed"
+                item.status_message = "Dry-run: протокол сгенерирован, публикация пропущена"
+                result["success"] = True
+            elif not publishable:
+                item.status = "validation_failed"
+                item.status_message = "Валидация не пройдена"
+                result["success"] = False
+            else:
+                item.status = "failed"
+                result["success"] = False
 
         except Exception as e:
             item.status = "failed"
@@ -217,6 +236,52 @@ class ProcessingService:
             )
 
         return result
+
+    def republish(self, item: BatchItem) -> dict:
+        if not item.debug_directory:
+            return {"success": False, "error": "Нет debug-каталога с готовыми артефактами"}
+
+        proto_path = item.debug_directory / "protocol.json"
+        html_path = item.debug_directory / "protocol_preview.html"
+
+        if not proto_path.exists() or not html_path.exists():
+            return {"success": False, "error": "Готовые артефакты (JSON/HTML) не найдены"}
+
+        try:
+            import json
+            proto_data = json.loads(proto_path.read_text(encoding="utf-8"))
+            html = html_path.read_text(encoding="utf-8")
+
+            if item.dry_run:
+                return {"success": True, "url": None, "message": "Dry-run: публикация пропущена"}
+
+            parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
+            title = proto_data.get("protocol_title", item.display_name or "Протокол встречи")
+            page = self.confluence.create_page(
+                title=title,
+                storage_html=html,
+                parent_page_id=parent_id,
+            )
+            item.result_url = page.get("url", "")
+
+            if item.send_telegram:
+                try:
+                    meeting_date = proto_data.get("meeting_date", "")
+                    key_outcomes = proto_data.get("key_outcomes", "")[:200]
+                    self.telegram.send_notification(
+                        protocol_title=title,
+                        meeting_date=meeting_date,
+                        key_result=key_outcomes or "Протокол сформирован",
+                        confluence_url=item.result_url,
+                    )
+                except Exception as te:
+                    print(f"Telegram notification failed: {te}")
+
+            item.status = "completed"
+            return {"success": True, "url": item.result_url}
+
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     def _load_transcript(self, item: BatchItem) -> str:
         if item.source_type == "local_transcript":

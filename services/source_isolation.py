@@ -4,7 +4,11 @@ from pathlib import Path
 from models.validation import ValidationReport, ValidationStatus
 
 
-def generate_source_context_id(source_path: str | None = None, bitlink_recording_id: str | None = None) -> str:
+def generate_source_context_id(source_path: str | None = None,
+                               bitlink_recording_id: str | None = None,
+                               source_sha256: str | None = None) -> str:
+    if source_sha256:
+        return source_sha256[:16]
     seed = source_path or bitlink_recording_id or str(uuid.uuid4())
     return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
 
