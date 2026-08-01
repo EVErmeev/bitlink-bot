@@ -6,12 +6,12 @@
   "audit_file": "docs/opencode/audits/AUDIT-2026-08-01-e7cc95f.md",
   "active_task_id": "TASK-2026-08-01-e7cc95f",
   "active_task_file": "docs/opencode/tasks/TASK-2026-08-01-e7cc95f.md",
-  "base_commit": "e7cc95fb0d375614849351cdef131f896dcec137",
-  "head_commit": null,
+  "base_commit": "2644b52dee92f7f6d2709496335f90364c47057f",
+  "head_commit": "4990751e472cb95c79a2e94fce664b9cae867dc8",
   "working_branch": "fix/audit-e7cc95f",
   "pull_request_url": null,
-  "status": "changes_required",
-  "validation_state": "awaiting_fixes",
+  "status": "in_progress",
+  "validation_state": "implementing_fixes",
   "required_checks": [
     "python -m compileall .",
     "pytest -q",
@@ -199,6 +199,6 @@
     "BB-CRIT-009: queue recovery not implemented",
     "BB-CRIT-010: republish is a stub"
   ],
-  "next_action": "fix BB-CRIT-001: implement real HTTP adapters with explicit mock toggle",
-  "updated_at": "2026-08-01T19:15:00Z"
+  "next_action": "fix BB-CRIT-001: implement real HTTP adapters with explicit *_MOCK toggle and error on missing config",
+  "updated_at": "2026-08-01T19:20:00Z"
 }
