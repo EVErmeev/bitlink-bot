@@ -1,0 +1,21 @@
+{
+  "schema_version": "1.0",
+  "repository": "EVErmeev/bitlink-bot",
+  "default_branch": "main",
+  "audit_id": "AUDIT-2026-08-01-e7cc95f",
+  "audit_file": "docs/opencode/audits/AUDIT-2026-08-01-e7cc95f.md",
+  "active_task_id": "TASK-2026-08-01-e7cc95f",
+  "active_task_file": "docs/opencode/tasks/TASK-2026-08-01-e7cc95f.md",
+  "base_commit": "e7cc95fb0d375614849351cdef131f896dcec137",
+  "head_commit": null,
+  "working_branch": "fix/audit-e7cc95f",
+  "pull_request_url": null,
+  "status": "changes_required",
+  "validation_state": "awaiting_fixes",
+  "required_checks": [
+    "python -m compileall .",
+    "pytest -q",
+    "ruff check .",
+    "mypy ."
+  ]
+}

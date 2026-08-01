@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenCode Manifest",
+  "description": "Схема manifest.json — точки входа служебного контура OpenCode.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "repository",
+    "default_branch",
+    "base_commit",
+    "working_branch",
+    "status",
+    "validation_state"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Версия схемы manifest.",
+      "enum": ["1.0"]
+    },
+    "repository": {
+      "type": "string",
+      "description": "Полное имя репозитория (owner/repo)."
+    },
+    "default_branch": {
+      "type": "string",
+      "description": "Ветка по умолчанию."
+    },
+    "audit_id": {
+      "type": "string",
+      "description": "Идентификатор текущего аудита."
+    },
+    "audit_file": {
+      "type": "string",
+      "description": "Относительный путь к файлу аудита."
+    },
+    "active_task_id": {
+      "type": "string",
+      "description": "Идентификатор активного задания."
+    },
+    "active_task_file": {
+      "type": "string",
+      "description": "Относительный путь к файлу задания."
+    },
+    "base_commit": {
+      "type": "string",
+      "description": "SHA коммита, на котором проводился аудит."
+    },
+    "head_commit": {
+      "type": ["string", "null"],
+      "description": "SHA последнего коммита с исправлениями."
+    },
+    "working_branch": {
+      "type": "string",
+      "description": "Имя рабочей ветки с исправлениями."
+    },
+    "pull_request_url": {
+      "type": ["string", "null"],
+      "description": "URL Pull Request."
+    },
+    "status": {
+      "type": "string",
+      "description": "Текущий статус цикла.",
+      "enum": [
+        "changes_required",
+        "in_progress",
+        "awaiting_independent_validation",
+        "accepted"
+      ]
+    },
+    "validation_state": {
+      "type": "string",
+      "description": "Состояние валидации.",
+      "enum": [
+        "awaiting_fixes",
+        "implementing_fixes",
+        "awaiting_review",
+        "accepted"
+      ]
+    },
+    "required_checks": {
+      "type": "array",
+      "description": "Список обязательных проверок перед PR.",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}
