@@ -55,6 +55,12 @@ TELEGRAM_ENABLED: bool = _bool("TELEGRAM_ENABLED", False)
 TELEGRAM_SEND_BATCH_SUMMARY: bool = _bool("TELEGRAM_SEND_BATCH_SUMMARY", True)
 TELEGRAM_MOCK: bool = _bool("TELEGRAM_MOCK", True)
 
+# ── LLM ──
+LLM_MOCK: bool = _bool("LLM_MOCK", True)
+LLM_API_URL: str = _str("LLM_API_URL")
+LLM_API_KEY: str = _str("LLM_API_KEY")
+LLM_MODEL: str = _str("LLM_MODEL", "gpt-4o")
+
 # ── Protocol ──
 PROTOCOL_TEMPLATE: str = _str("PROTOCOL_TEMPLATE", "project_detailed")
 PROTOCOL_MODE: str = _str("PROTOCOL_MODE", "auto")

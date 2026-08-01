@@ -21,6 +21,10 @@ class BaseProtocolTemplate(ABC):
     def assemble(self, protocol: Protocol, atomic_items: list, meeting_metadata: dict) -> Protocol:
         pass
 
+    def assemble_with_llm_output(self, protocol: Protocol, atomic_items: list,
+                                  llm_output: str, meeting_metadata: dict) -> Protocol:
+        return self.assemble(protocol, atomic_items, meeting_metadata)
+
     @abstractmethod
     def validate(self, protocol: Protocol) -> ValidationReport:
         pass

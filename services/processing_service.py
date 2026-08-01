@@ -22,6 +22,7 @@ try:
     from services.transcription_service import TranscriptionClient
     from services.confluence_service import ConfluenceClient
     from services.telegram_service import TelegramClient
+    from services.llm_service import LLMClient
     from services.runtime_estimator import RuntimeEstimator
 except ImportError:
     import sys
@@ -41,6 +42,7 @@ except ImportError:
     from transcription_service import TranscriptionClient
     from confluence_service import ConfluenceClient
     from telegram_service import TelegramClient
+    from llm_service import LLMClient
     from runtime_estimator import RuntimeEstimator
 
 
@@ -59,6 +61,7 @@ class ProcessingService:
         self.transcription = TranscriptionClient()
         self.confluence = ConfluenceClient()
         self.telegram = TelegramClient()
+        self.llm = LLMClient()
         self.templates = TemplateRegistry()
         self.estimator = RuntimeEstimator()
 
@@ -96,6 +99,23 @@ class ProcessingService:
             if not template:
                 raise Exception(f"Template {item.protocol_template} not found")
 
+            system_prompt = template.get_system_prompt()
+            user_prompt = (
+                f"Транскрипт встречи:\n\n{transcript_text}\n\n"
+                f"Извлечённые факты (atomic items):\n"
+                + "\n".join(
+                    f"  [{ai.item_type}] {ai.speaker + ': ' if ai.speaker else ''}{ai.text}"
+                    for ai in atomic_items[:50]
+                )
+                + f"\n\nДата встречи: {meeting_date or 'не определена'}\n"
+                + f"Название: {item.display_name}\n"
+            )
+
+            llm_output = self.llm.generate(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+
             protocol = Protocol(
                 protocol_id=str(uuid.uuid4()),
                 template_id=template.template_id,
@@ -108,11 +128,11 @@ class ProcessingService:
             protocol.protocol_title = item.display_name or "Протокол встречи"
             protocol.meeting_purpose = "Обсуждение статуса и планов проекта"
 
-            protocol = template.assemble(protocol, atomic_items, {
-                "date": meeting_date,
-                "time": meeting_time,
-                "item": item,
-            })
+            protocol.atomic_items = atomic_items
+            protocol = template.assemble_with_llm_output(
+                protocol, atomic_items, llm_output,
+                {"date": meeting_date, "time": meeting_time, "item": item},
+            )
 
             self._report_progress("fact_validation", 70, item)
             fact_report = validate_facts(protocol, transcript_text)
