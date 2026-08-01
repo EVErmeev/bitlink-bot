@@ -2,7 +2,6 @@
 import json
 import os
 import re
-import subprocess
 import tempfile
 from dataclasses import dataclass
 from typing import Protocol
@@ -22,14 +21,18 @@ class ConnectionCheckResult:
 
 class OneBitProviderError(RuntimeError):
     def __init__(self, stage="", code="", safe_message="", exit_code=None,
-                 response_type=None, safe_stdout="", safe_stderr=""):
+                 response_type=None, safe_stdout="", safe_stderr="",
+                 stdout_encoding=None, stderr_encoding=None, duration_seconds=None):
         self.stage = stage
         self.code = code
         self.safe_message = safe_message
         self.exit_code = exit_code
         self.response_type = response_type
-        self.safe_stdout = safe_stdout
-        self.safe_stderr = safe_stderr
+        self.safe_stdout = safe_stdout or ""
+        self.safe_stderr = safe_stderr or ""
+        self.stdout_encoding = stdout_encoding
+        self.stderr_encoding = stderr_encoding
+        self.duration_seconds = duration_seconds
         super().__init__(safe_message)
 
 
@@ -134,25 +137,22 @@ class OneBitNewtonCLIProvider:
         return [self.cli_path]
 
     def check_connection(self) -> ConnectionCheckResult:
-        try:
-            base = self._build_base_args()
-            args = base + ["version"]
-            result = subprocess.run(args, capture_output=True, text=True, timeout=15, shell=False)
-            if result.returncode == 0:
-                return ConnectionCheckResult(ok=True, stage="cli_version",
-                    safe_message=f"Newton CLI {result.stdout.strip()[:100]}")
-            return ConnectionCheckResult(ok=False, stage="cli_version",
-                safe_message=f"CLI exit code {result.returncode}: {result.stderr[:200]}")
-        except FileNotFoundError:
-            return ConnectionCheckResult(ok=False, stage="cli_path",
-                safe_message=f"CLI not found: {self.cli_path}")
-        except Exception as e:
-            return ConnectionCheckResult(ok=False, stage="cli_error", safe_message=str(e)[:200])
+        from services.process_runner import run_process
+        args = self._build_base_args() + ["version"]
+        result = run_process(args, timeout_seconds=min(15, self.timeout_seconds),
+                            secret_values=[self.token] if self.token else None)
+        if result.returncode == 0:
+            return ConnectionCheckResult(ok=True, stage="cli_version",
+                safe_message=f"Newton CLI {result.stdout.strip()[:100]}")
+        return ConnectionCheckResult(ok=False, stage="cli_version",
+            safe_message=f"CLI exit {result.returncode}: {result.stderr[:200]}")
 
     def generate(self, system_prompt, user_prompt, *, model="", temperature=0.1, max_tokens=4096):
         import json as json_mod
         import os as _os
         import re as re_mod
+
+        from services.process_runner import classify_auth_error, run_process
 
         if not self.token:
             raise OneBitProviderError(stage="provider_config", code="ONEBIT_TOKEN_MISSING",
@@ -171,14 +171,24 @@ class OneBitNewtonCLIProvider:
             env = _os.environ.copy()
             env["NEWTON_TOKEN"] = self.token
 
-            result = subprocess.run(args, input=user_prompt, capture_output=True,
-                                   text=True, shell=False, timeout=self.timeout_seconds,
-                                   env=env, encoding="utf-8")
+            proc_result = run_process(args, input_text=user_prompt, env=env,
+                                     timeout_seconds=self.timeout_seconds,
+                                     secret_values=[self.token])
 
-            if result.returncode != 0:
+            if proc_result.returncode != 0:
+                auth_code, auth_msg = classify_auth_error(proc_result.stderr, proc_result.returncode)
+                if auth_code:
+                    raise OneBitProviderError(stage="cli_execution", code=auth_code,
+                        safe_message=auth_msg, exit_code=proc_result.returncode,
+                        safe_stderr=proc_result.stderr[:300],
+                        stderr_encoding=proc_result.stderr_encoding,
+                        duration_seconds=proc_result.duration_seconds)
                 raise OneBitProviderError(stage="cli_execution", code="CLI_NONZERO_EXIT",
-                    safe_message=f"Newton CLI завершился с кодом {result.returncode}",
-                    exit_code=result.returncode, safe_stderr=result.stderr[:300])
+                    safe_message=f"Newton CLI завершился с кодом {proc_result.returncode}: {proc_result.stderr[:200]}",
+                    exit_code=proc_result.returncode,
+                    safe_stderr=proc_result.stderr[:300],
+                    stderr_encoding=proc_result.stderr_encoding,
+                    duration_seconds=proc_result.duration_seconds)
 
             if not _os.path.exists(output_path):
                 raise OneBitProviderError(stage="output_check", code="OUTPUT_FILE_MISSING",

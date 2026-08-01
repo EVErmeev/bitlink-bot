@@ -1,7 +1,7 @@
 import importlib
 import json
 import os
-import subprocess
+import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -196,9 +196,12 @@ class SettingsFrame(ttk.Frame):
         btn_frame = ttk.Frame(p)
         btn_frame.grid(row=4, column=0, columnspan=3, pady=5, sticky=tk.W)
         ttk.Button(btn_frame, text="Обнаружить CLI", command=self._discover_cli).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="Проверить версию", command=self._check_cli_version).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="Проверить health", command=self._check_cli_health).pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="Проверить токен и LLM", command=self._check_cli_token_and_llm).pack(side=tk.LEFT, padx=3)
+        self._llm_version_btn = ttk.Button(btn_frame, text="Проверить версию", command=self._check_cli_version)
+        self._llm_version_btn.pack(side=tk.LEFT, padx=3)
+        self._llm_health_btn = ttk.Button(btn_frame, text="Проверить health", command=self._check_cli_health)
+        self._llm_health_btn.pack(side=tk.LEFT, padx=3)
+        self._llm_token_btn = ttk.Button(btn_frame, text="Проверить токен и LLM", command=self._check_cli_token_and_llm)
+        self._llm_token_btn.pack(side=tk.LEFT, padx=3)
         ttk.Button(btn_frame, text="Копировать диагностику", command=self._copy_diagnostics).pack(side=tk.LEFT, padx=3)
 
     def _build_openai_panel(self):
@@ -278,11 +281,11 @@ class SettingsFrame(ttk.Frame):
         except ValueError:
             return 120
 
-    def _build_cli_base_args(self):
+    def _build_cli_args(self, subcommand):
         path = self._get_cli_path()
         if path.endswith(".cmd") or path.endswith(".bat"):
-            return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", path]
-        return [path]
+            return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", path, subcommand]
+        return [path, subcommand]
 
     def _discover_cli(self):
         import shutil
@@ -301,47 +304,61 @@ class SettingsFrame(ttk.Frame):
         self._llm_status_label.configure(text="CLI не найден", foreground="red")
 
     def _check_cli_version(self):
+        from services.process_runner import run_process
+
         path = self._get_cli_path()
         if not path:
             self._llm_status_label.configure(text="Укажите путь CLI", foreground="red")
             return
-        try:
-            base = self._build_cli_base_args()
-            result = subprocess.run(base + ["version"], capture_output=True, text=True,
-                                    timeout=15, shell=False)
-            if result.returncode == 0:
-                self._llm_status_label.configure(
-                    text=f"Версия: {result.stdout.strip()[:100]}", foreground="green")
-            else:
-                self._llm_status_label.configure(
-                    text=f"CLI exit {result.returncode}: {result.stderr[:150]}", foreground="red")
-        except FileNotFoundError:
-            self._llm_status_label.configure(text=f"CLI не найден: {path}", foreground="red")
-        except Exception as e:
-            self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
+
+        self._llm_status_label.configure(text="Проверка версии...", foreground="gray")
+        self._llm_version_btn.configure(state=tk.DISABLED)
+
+        def worker():
+            args = self._build_cli_args("version")
+            result = run_process(args, timeout_seconds=15)
+            self.root.after(0, lambda: self._on_version_result(result))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_version_result(self, result):
+        self._llm_version_btn.configure(state=tk.NORMAL)
+        if result.returncode == 0:
+            self._llm_status_label.configure(
+                text=f"Версия: {result.stdout.strip()[:100]}", foreground="green")
+        else:
+            self._llm_status_label.configure(
+                text=f"CLI exit {result.returncode}: {result.stderr[:150]}", foreground="red")
 
     def _check_cli_health(self):
+        from services.process_runner import run_process
+
         path = self._get_cli_path()
         if not path:
             self._llm_status_label.configure(text="Укажите путь CLI", foreground="red")
             return
-        try:
-            base = self._build_cli_base_args()
-            result = subprocess.run(base + ["health"], capture_output=True, text=True,
-                                    timeout=15, shell=False)
-            if result.returncode == 0:
-                self._llm_status_label.configure(
-                    text=f"Health OK: {result.stdout.strip()[:100]}", foreground="green")
-                messagebox.showinfo("Health", "CLI health check прошёл успешно.\n\n"
-                                    "Примечание: health НЕ проверяет аутентификацию токена. "
-                                    "Для проверки токена нажмите «Проверить токен и LLM».")
-            else:
-                self._llm_status_label.configure(
-                    text=f"Health exit {result.returncode}", foreground="red")
-        except FileNotFoundError:
-            self._llm_status_label.configure(text=f"CLI не найден: {path}", foreground="red")
-        except Exception as e:
-            self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
+
+        self._llm_status_label.configure(text="Проверка health...", foreground="gray")
+        self._llm_health_btn.configure(state=tk.DISABLED)
+
+        def worker():
+            args = self._build_cli_args("health")
+            result = run_process(args, timeout_seconds=15)
+            self.root.after(0, lambda: self._on_health_result(result))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_health_result(self, result):
+        self._llm_health_btn.configure(state=tk.NORMAL)
+        if result.returncode == 0:
+            self._llm_status_label.configure(
+                text=f"Health OK: {result.stdout.strip()[:100]}", foreground="green")
+            messagebox.showinfo("Health", "CLI health check прошёл успешно.\n\n"
+                                "Примечание: health НЕ проверяет аутентификацию токена. "
+                                "Для проверки токена нажмите «Проверить токен и LLM».")
+        else:
+            self._llm_status_label.configure(
+                text=f"Health exit {result.returncode}", foreground="red")
 
     def _check_cli_token_and_llm(self):
         from services.llm_providers import OneBitNewtonCLIProvider, OneBitProviderError
@@ -360,82 +377,84 @@ class SettingsFrame(ttk.Frame):
             return
 
         self._llm_status_label.configure(text="Проверяю токен и LLM...", foreground="#3366cc")
+        self._llm_token_btn.configure(state=tk.DISABLED)
         self.update_idletasks()
 
-        p = OneBitNewtonCLIProvider(cli_path=path, model=model, token=token, timeout_seconds=timeout)
+        def worker():
+            p = OneBitNewtonCLIProvider(cli_path=path, model=model, token=token, timeout_seconds=timeout)
 
-        # Step 1: check CLI works
-        conn = p.check_connection()
-        if not conn.ok:
-            self._llm_status_label.configure(text=f"CLI: {conn.safe_message}", foreground="red")
-            return
+            conn = p.check_connection()
+            if not conn.ok:
+                self.root.after(0, lambda: self._on_token_result(
+                    ok=False, text=f"CLI: {conn.safe_message}", foreground="red"))
+                return
 
-        # Step 2: real generate with schema validation
-        try:
-            result = p.generate(
-                system_prompt="Return valid JSON with exactly one key: status, value: ok. "
-                              "Output ONLY the JSON object, no explanation, no markdown fences.",
-                user_prompt='{"status": "ok"}',
-                model=model,
-                temperature=0.1,
-                max_tokens=128,
-            )
-            parsed = json.loads(result)
-            if parsed.get("status") == "ok":
-                self._llm_status_label.configure(text=f"OK — {model}", foreground="green")
-            else:
-                self._llm_status_label.configure(
-                    text=f"OK, но неожиданный ответ: {result[:100]}", foreground="#cc6600")
-        except OneBitProviderError as e:
-            self._llm_status_label.configure(text=f"Ошибка [{e.code}]: {e.safe_message}", foreground="red")
-            messagebox.showerror("Ошибка Newton CLI",
-                                 f"Код: {e.code}\n"
-                                 f"Этап: {e.stage}\n"
-                                 f"{e.safe_message}\n\n"
-                                 f"stderr: {e.safe_stderr[:200] if e.safe_stderr else '(нет)'}")
-        except Exception as e:
-            self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
+            try:
+                result = p.generate(
+                    system_prompt="Return valid JSON with exactly one key: status, value: ok. "
+                                  "Output ONLY the JSON object, no explanation, no markdown fences.",
+                    user_prompt='{"status": "ok"}',
+                    model=model,
+                    temperature=0.1,
+                    max_tokens=128,
+                )
+                parsed = json.loads(result)
+                if parsed.get("status") == "ok":
+                    self.root.after(0, lambda: self._on_token_result(
+                        ok=True, text=f"OK — {model}", foreground="green"))
+                else:
+                    self.root.after(0, lambda: self._on_token_result(
+                        ok=True, text=f"OK, но неожиданный ответ: {result[:100]}",
+                        foreground="#cc6600"))
+            except OneBitProviderError as e:
+                self.root.after(0, lambda e=e: self._on_token_error(e))
+            except Exception as e:
+                self.root.after(0, lambda e=e: self._on_token_result(
+                    ok=False, text=f"Ошибка: {e}", foreground="red"))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_token_result(self, ok, text, foreground):
+        self._llm_token_btn.configure(state=tk.NORMAL)
+        self._llm_status_label.configure(text=text, foreground=foreground)
+
+    def _on_token_error(self, e):
+        self._llm_token_btn.configure(state=tk.NORMAL)
+        self._llm_status_label.configure(text=f"Ошибка [{e.code}]: {e.safe_message}", foreground="red")
+        messagebox.showerror("Ошибка Newton CLI",
+                             f"Код: {e.code}\n"
+                             f"Этап: {e.stage}\n"
+                             f"{e.safe_message}\n\n"
+                             f"stderr: {e.safe_stderr[:200] if e.safe_stderr else '(нет)'}")
 
     def _copy_diagnostics(self):
+        from services.process_runner import run_process
+
+        path = self._get_cli_path()
         lines = []
         lines.append("=== Диагностика OneBit Newton CLI ===")
-        lines.append(f"CLI путь: {self._get_cli_path()}")
+        lines.append(f"CLI путь: {path}")
         lines.append(f"Токен задан: {'да' if self._get_onebit_token() else 'нет'}")
         lines.append(f"Модель: {self._get_onebit_model()}")
         lines.append(f"Таймаут: {self._get_onebit_timeout()}с")
 
-        # CLI exists?
-        path = self._get_cli_path()
         lines.append(f"Файл CLI существует: {os.path.isfile(path) if path else 'путь не указан'}")
 
-        # version
         if path and os.path.isfile(path):
-            try:
-                base = self._build_cli_base_args()
-                r = subprocess.run(base + ["version"], capture_output=True, text=True,
-                                   timeout=15, shell=False)
-                lines.append(f"CLI version exit={r.returncode}")
-                if r.stdout.strip():
-                    lines.append(f"  stdout: {r.stdout.strip()[:200]}")
-                if r.stderr.strip():
-                    lines.append(f"  stderr: {r.stderr.strip()[:200]}")
-            except Exception as e:
-                lines.append(f"CLI version ошибка: {e}")
+            rv = run_process(self._build_cli_args("version"), timeout_seconds=15)
+            lines.append(f"CLI version exit={rv.returncode}")
+            if rv.stdout.strip():
+                lines.append(f"  stdout: {rv.stdout.strip()[:200]}")
+            if rv.stderr.strip():
+                lines.append(f"  stderr: {rv.stderr.strip()[:200]}")
 
-            # health
-            try:
-                base = self._build_cli_base_args()
-                r = subprocess.run(base + ["health"], capture_output=True, text=True,
-                                   timeout=15, shell=False)
-                lines.append(f"CLI health exit={r.returncode}")
-                if r.stdout.strip():
-                    lines.append(f"  stdout: {r.stdout.strip()[:200]}")
-                if r.stderr.strip():
-                    lines.append(f"  stderr: {r.stderr.strip()[:200]}")
-            except Exception as e:
-                lines.append(f"CLI health ошибка: {e}")
+            rh = run_process(self._build_cli_args("health"), timeout_seconds=15)
+            lines.append(f"CLI health exit={rh.returncode}")
+            if rh.stdout.strip():
+                lines.append(f"  stdout: {rh.stdout.strip()[:200]}")
+            if rh.stderr.strip():
+                lines.append(f"  stderr: {rh.stderr.strip()[:200]}")
 
-        # env
         lines.append(f"NEWTON_TOKEN env: {'задан' if os.getenv('NEWTON_TOKEN') else 'не задан'}")
         lines.append(f"ONEBIT_LLM_TOKEN env: {'задан' if os.getenv('ONEBIT_LLM_TOKEN') else 'не задан'}")
 

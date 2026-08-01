@@ -4,7 +4,11 @@ import tempfile
 
 import pytest
 
-from services.llm_providers import ConnectionCheckResult, OneBitNewtonCLIProvider
+from services.llm_providers import (
+    ConnectionCheckResult,
+    OneBitNewtonCLIProvider,
+    OneBitProviderError,
+)
 
 
 def test_provider_is_instantiable():
@@ -50,7 +54,6 @@ def test_check_connection_missing_cli():
     result = p.check_connection()
     assert isinstance(result, ConnectionCheckResult)
     assert result.ok is False
-    assert result.stage == "cli_path"
     assert "not found" in result.safe_message.lower()
 
 
@@ -83,12 +86,57 @@ def test_generate_creates_and_cleans_temp_file():
     assert len(newton_leftovers) == 0, f"Temp files not cleaned up: {newton_leftovers}"
 
 
-def test_shell_is_false_by_design():
-    """Confirm the design contract: subprocess always uses shell=False."""
+def test_process_runner_uses_shell_false():
+    """Confirm the design contract: run_process always uses shell=False."""
     import inspect
 
-    source = inspect.getsource(OneBitNewtonCLIProvider.generate)
-    assert "shell=False" in source, "generate() must use shell=False"
+    from services.process_runner import run_process
+
+    source = inspect.getsource(run_process)
+    assert "shell=False" in source, "run_process() must use shell=False"
+
+
+def test_provider_uses_run_process_not_subprocess():
+    """Confirm provider uses run_process, not subprocess.run directly."""
+    import inspect
+
+    source_gen = inspect.getsource(OneBitNewtonCLIProvider.generate)
+    assert "run_process(" in source_gen, "generate() must use run_process"
+    assert "subprocess.run" not in source_gen, "generate() must NOT use subprocess.run directly"
 
     source_conn = inspect.getsource(OneBitNewtonCLIProvider.check_connection)
-    assert "shell=False" in source_conn, "check_connection() must use shell=False"
+    assert "run_process(" in source_conn, "check_connection() must use run_process"
+    assert "subprocess.run" not in source_conn, "check_connection() must NOT use subprocess.run directly"
+
+
+def test_onebit_provider_error_new_fields():
+    e = OneBitProviderError(
+        stage="test", code="T001", safe_message="msg",
+        exit_code=1, response_type="json",
+        safe_stdout="out", safe_stderr="err",
+        stdout_encoding="utf-8", stderr_encoding="cp1251",
+        duration_seconds=2.5,
+    )
+    assert e.stage == "test"
+    assert e.code == "T001"
+    assert e.safe_message == "msg"
+    assert e.exit_code == 1
+    assert e.response_type == "json"
+    assert e.safe_stdout == "out"
+    assert e.safe_stderr == "err"
+    assert e.stdout_encoding == "utf-8"
+    assert e.stderr_encoding == "cp1251"
+    assert e.duration_seconds == 2.5
+
+
+def test_onebit_provider_error_defaults():
+    e = OneBitProviderError(safe_message="test")
+    assert e.stage == ""
+    assert e.code == ""
+    assert e.safe_stdout == ""
+    assert e.safe_stderr == ""
+    assert e.stdout_encoding is None
+    assert e.stderr_encoding is None
+    assert e.duration_seconds is None
+    assert e.exit_code is None
+    assert e.response_type is None
