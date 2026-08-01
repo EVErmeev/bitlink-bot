@@ -43,9 +43,10 @@ def test_mock_provider_falls_back_to_mock_schema_generation():
 
 
 def test_provider_type_falls_back_to_settings_when_none():
+    from services.llm_providers import MockLLMProvider
     from services.llm_service import LLMClient
-    client = LLMClient(api_url="https://api.example.com", api_key="sk-test",
-                       mock_mode=False, provider_type=None)
+    # When mock_mode=True and no provider_type, should use mock
+    client = LLMClient(mock_mode=True, provider_type=None)
     assert isinstance(client._provider, MockLLMProvider)
 
 

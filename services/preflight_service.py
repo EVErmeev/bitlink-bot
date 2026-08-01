@@ -75,25 +75,24 @@ def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list
 
     # Service checks per source type
     if st == "local_transcript":
-        # LLM required
-        if config.llm_mode == "mock":
+        # LLM provider-specific checks
+        if config.llm_provider == "mock":
             warnings.append(f"{item.display_name}: LLM в mock-режиме")
-        elif config.llm_mode == "real":
-            if not config.llm_api_url or not config.llm_api_key:
-                errors.append(f"{item.display_name}: LLM в real-режиме, но API URL/Key не указаны")
+        elif config.llm_provider == "onebit_newton_cli":
+            if not config.onebit_cli_path:
+                errors.append(f"{item.display_name}: Newton CLI path не указан")
                 blocking = True
-            else:
-                try:
-                    from services.client_factory import build_llm_client
-                    llm = build_llm_client(config)
-                    if not llm.check_connection():
-                        errors.append(f"{item.display_name}: LLM API недоступен")
-                        blocking = True
-                except Exception as e:
-                    errors.append(f"{item.display_name}: ошибка LLM: {e}")
-                    blocking = True
-        # Newton SKIPPED for transcript
-        # Bitlink SKIPPED for transcript
+            elif not Path(config.onebit_cli_path).exists():
+                errors.append(f"{item.display_name}: Newton CLI не найден: {config.onebit_cli_path}")
+                blocking = True
+            if not config.onebit_llm_token:
+                errors.append(f"{item.display_name}: NEWTON_TOKEN не указан")
+                blocking = True
+        elif config.llm_provider == "openai_compatible":
+            if not config.llm_api_url or not config.llm_api_key:
+                errors.append(f"{item.display_name}: OpenAI требует LLM_API_URL и LLM_API_KEY")
+                blocking = True
+
         # Confluence only if not dry-run
         if not item.dry_run and config.confluence_mode != "mock":
             if not config.confluence_base_url or not config.confluence_token:
@@ -112,23 +111,25 @@ def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list
         elif config.newton_mode in ("disabled", "http_api"):
             errors.append(f"{item.display_name}: Newton ({config.newton_mode}) — видео не может быть обработано")
             blocking = True
-        # LLM same as transcript
-        if config.llm_mode == "mock":
+
+        # LLM provider-specific checks
+        if config.llm_provider == "mock":
             warnings.append(f"{item.display_name}: LLM в mock-режиме")
-        elif config.llm_mode == "real":
-            if not config.llm_api_url or not config.llm_api_key:
-                errors.append(f"{item.display_name}: LLM в real-режиме, но API URL/Key не указаны")
+        elif config.llm_provider == "onebit_newton_cli":
+            if not config.onebit_cli_path:
+                errors.append(f"{item.display_name}: Newton CLI path не указан")
                 blocking = True
-            else:
-                try:
-                    from services.client_factory import build_llm_client
-                    llm = build_llm_client(config)
-                    if not llm.check_connection():
-                        errors.append(f"{item.display_name}: LLM API недоступен")
-                        blocking = True
-                except Exception as e:
-                    errors.append(f"{item.display_name}: ошибка LLM: {e}")
-                    blocking = True
+            elif not Path(config.onebit_cli_path).exists():
+                errors.append(f"{item.display_name}: Newton CLI не найден: {config.onebit_cli_path}")
+                blocking = True
+            if not config.onebit_llm_token:
+                errors.append(f"{item.display_name}: NEWTON_TOKEN не указан")
+                blocking = True
+        elif config.llm_provider == "openai_compatible":
+            if not config.llm_api_url or not config.llm_api_key:
+                errors.append(f"{item.display_name}: OpenAI требует LLM_API_URL и LLM_API_KEY")
+                blocking = True
+
         # Confluence same as transcript
         if not item.dry_run and config.confluence_mode != "mock":
             if not config.confluence_base_url or not config.confluence_token:

@@ -9,10 +9,15 @@ class RuntimeConfig:
     newton_token: str = ""
     newton_base_url: str = ""
     newton_exec_path: str = ""
+    llm_provider: str = "mock"  # mock | onebit_newton_cli | openai_compatible
     llm_mode: str = "mock"
     llm_api_url: str = ""
     llm_api_key: str = ""
-    llm_model: str = "gpt-4o"
+    llm_model: str = "gpt4"
+    onebit_cli_path: str = "C:\\Users\\egore\\AppData\\Local\\NewtonCLI\\newton.cmd"
+    onebit_cli_transport: str = "native"
+    onebit_cli_timeout_seconds: int = 120
+    onebit_llm_token: str = ""
     confluence_mode: str = "mock"
     confluence_base_url: str = ""
     confluence_token: str = ""
@@ -41,10 +46,15 @@ class RuntimeConfig:
         c.newton_token = settings.NEWTON_TOKEN
         c.newton_base_url = settings.NEWTON_BASE_URL
         c.newton_exec_path = settings.NEWTON_PATH
-        c.llm_mode = "mock" if settings.LLM_MOCK else "real"
+        c.llm_provider = os.getenv("LLM_PROVIDER", "mock")
+        c.llm_model = os.getenv("LLM_MODEL", "gpt4")
+        c.onebit_cli_path = os.getenv("ONEBIT_CLI_PATH", "C:\\Users\\egore\\AppData\\Local\\NewtonCLI\\newton.cmd")
+        c.onebit_cli_transport = os.getenv("ONEBIT_CLI_TRANSPORT", "native")
+        c.onebit_cli_timeout_seconds = int(os.getenv("ONEBIT_CLI_TIMEOUT_SECONDS", "120"))
+        c.onebit_llm_token = os.getenv("ONEBIT_LLM_TOKEN", "") or os.getenv("NEWTON_TOKEN", "")
+        c.llm_mode = "mock" if c.llm_provider == "mock" else "real"
         c.llm_api_url = settings.LLM_API_URL
         c.llm_api_key = settings.LLM_API_KEY
-        c.llm_model = settings.LLM_MODEL
         c.confluence_mode = settings.CONFLUENCE_PROVIDER
         c.confluence_base_url = settings.CONFLUENCE_BASE_URL
         c.confluence_token = settings.CONFLUENCE_TOKEN
@@ -68,6 +78,7 @@ class RuntimeConfig:
     def set_profile(self, profile_name: str):
         self.app_profile = profile_name
         if profile_name == "demo":
+            self.llm_provider = "mock"
             self.llm_mode = "mock"
             self.newton_mode = "mock"
             self.bitlink_mode = "mock"
@@ -83,6 +94,7 @@ class RuntimeConfig:
     def get_effective_services(self, source_type: str) -> dict:
         all_services = {
             "llm": self.llm_mode,
+            "llm_provider": self.llm_provider,
             "newton": self.newton_mode if source_type in ("local_video",) else "not_applicable",
             "bitlink": self.bitlink_mode if source_type in ("bitlink",) else "not_applicable",
             "confluence": self.confluence_mode,
@@ -92,8 +104,17 @@ class RuntimeConfig:
 
     def is_demo_for_source(self, source_type: str) -> bool:
         effective = self.get_effective_services(source_type)
-        mock_services = [k for k, v in effective.items() if v == "mock"]
-        return len(mock_services) > 0
+        # Only check content-generation services for demo status
+        # Confluence/Telegram being mock doesn't make the PROTOCOL demo
+        relevant = ["llm"]
+        if source_type == "local_video":
+            relevant.append("newton")
+        elif source_type == "bitlink":
+            relevant.append("bitlink")
+        for key in relevant:
+            if effective.get(key) == "mock":
+                return True
+        return False
 
     def is_production_blocked(self, source_type: str) -> bool:
         effective = self.get_effective_services(source_type)
@@ -102,10 +123,16 @@ class RuntimeConfig:
         if effective.get("llm") == "mock":
             return True
         if effective.get("llm") == "real":
-            if not self.llm_api_url:
-                return True
-            if not self.llm_api_key:
-                return True
+            if self.llm_provider == "onebit_newton_cli":
+                if not self.onebit_cli_path:
+                    return True
+                if not self.onebit_llm_token:
+                    return True
+            elif self.llm_provider == "openai_compatible":
+                if not self.llm_api_url:
+                    return True
+                if not self.llm_api_key:
+                    return True
         if effective.get("confluence") not in ("disabled", "mock", "rest"):
             return True
         return False
@@ -124,14 +151,17 @@ class RuntimeConfig:
             parts = ["PRODUCTION BLOCKED"]
             if effective["llm"] == "mock":
                 parts.append("LLM: mock")
-            elif effective["llm"] == "real" and (not self.llm_api_url or not self.llm_api_key):
-                parts.append("LLM: API URL/Key не настроены")
+            elif effective["llm"] == "real":
+                if self.llm_provider == "onebit_newton_cli" and (not self.onebit_cli_path or not self.onebit_llm_token):
+                    parts.append("LLM: Newton CLI/Token не настроены")
+                elif not self.llm_api_url or not self.llm_api_key:
+                    parts.append("LLM: API URL/Key не настроены")
             if effective["confluence"] not in ("rest", "disabled"):
                 parts.append("Confluence: не настроен")
             return " | ".join(parts)
         parts = ["PRODUCTION"]
         if effective["llm"] == "real":
-            parts.append("LLM: real")
+            parts.append(f"LLM: real ({self.llm_provider})")
         if effective["confluence"] == "rest":
             parts.append("Confluence: REST")
         elif effective["confluence"] == "disabled":
@@ -153,7 +183,9 @@ class RuntimeConfig:
         return {
             "app_profile": self.app_profile,
             "newton_mode": self.newton_mode,
-            "llm_mode": self.llm_mode, "llm_model": self.llm_model,
+            "llm_mode": self.llm_mode, "llm_provider": self.llm_provider,
+            "llm_model": self.llm_model,
+            "onebit_cli_path": self.onebit_cli_path,
             "confluence_mode": self.confluence_mode, "confluence_space_key": self.confluence_space_key,
             "telegram_mode": self.telegram_mode, "telegram_enabled": self.telegram_enabled,
             "bitlink_mode": self.bitlink_mode,

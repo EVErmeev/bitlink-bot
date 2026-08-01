@@ -1,4 +1,5 @@
 import importlib
+import json
 import os
 import tkinter as tk
 from pathlib import Path
@@ -280,12 +281,29 @@ class SettingsFrame(ttk.Frame):
                 timeout = int(self._llm_cli_timeout_entry.get().strip() or "120")
             except ValueError:
                 timeout = 120
+
             p = OneBitNewtonCLIProvider(cli_path=path, model=model, token=token, timeout_seconds=timeout)
-            result = p.check_connection()
-            if result.ok:
-                self._llm_status_label.configure(text=result.safe_message, foreground="green")
-            else:
-                self._llm_status_label.configure(text=result.safe_message, foreground="red")
+
+            conn = p.check_connection()
+            if not conn.ok:
+                self._llm_status_label.configure(text=f"CLI: {conn.safe_message}", foreground="red")
+                return
+
+            try:
+                result = p.generate(
+                    system_prompt="Return valid JSON with only one key: status, and its value: ok. Output ONLY the JSON object, no extra text.",
+                    user_prompt='{"status": "ok"}',
+                    model=model,
+                    temperature=0.1,
+                    max_tokens=128,
+                )
+                parsed = json.loads(result)
+                if parsed.get("status") == "ok":
+                    self._llm_status_label.configure(text=f"OK — {model}", foreground="green")
+                else:
+                    self._llm_status_label.configure(text=f"OK, но неожиданный ответ: {result[:100]}", foreground="#cc6600")
+            except Exception as e:
+                self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
             return
 
         if pt == "openai_compatible":
@@ -382,7 +400,6 @@ class SettingsFrame(ttk.Frame):
             "LLM_MOCK": "true" if self._llm_provider_var.get() == "mock" else "false",
             "LLM_API_URL": self._llm_url_entry.get(),
             "LLM_API_KEY": self._llm_key_entry.get(),
-            "LLM_MODEL": self._llm_model_entry.get() or self._llm_cli_model_var.get(),
             "ONEBIT_CLI_PATH": self._llm_cli_path_entry.get(),
             "ONEBIT_CLI_TRANSPORT": "native",
             "ONEBIT_CLI_TIMEOUT_SECONDS": self._llm_cli_timeout_entry.get(),
@@ -390,6 +407,15 @@ class SettingsFrame(ttk.Frame):
 
         for key, value in env_map.items():
             set_key(str(self.env_path), key, value)
+
+        # Provider-specific model save
+        provider = self._llm_provider_var.get()
+        set_key(str(self.env_path), "LLM_PROVIDER", provider)
+        if provider == "onebit_newton_cli":
+            set_key(str(self.env_path), "LLM_MODEL", self._llm_cli_model_var.get())
+            set_key(str(self.env_path), "ONEBIT_CLI_PATH", self._llm_cli_path_entry.get().strip())
+        elif provider == "openai_compatible":
+            set_key(str(self.env_path), "LLM_MODEL", self._llm_model_entry.get())
 
         importlib.reload(settings)
         reload_runtime_config()

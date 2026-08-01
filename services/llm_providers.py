@@ -115,9 +115,15 @@ class OneBitNewtonCLIProvider:
         self.token = token
         self.timeout_seconds = timeout_seconds
 
+    def _build_base_args(self) -> list:
+        if self.cli_path.endswith(".cmd") or self.cli_path.endswith(".bat"):
+            return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", self.cli_path]
+        return [self.cli_path]
+
     def check_connection(self) -> ConnectionCheckResult:
         try:
-            args = [self.cli_path, "version"]
+            base = self._build_base_args()
+            args = base + ["version"]
             result = subprocess.run(args, capture_output=True, text=True, timeout=15, shell=False)
             if result.returncode == 0:
                 return ConnectionCheckResult(ok=True, stage="cli_version",
@@ -131,50 +137,46 @@ class OneBitNewtonCLIProvider:
             return ConnectionCheckResult(ok=False, stage="cli_error", safe_message=str(e)[:200])
 
     def generate(self, system_prompt, user_prompt, *, model="", temperature=0.1, max_tokens=4096):
-        mdl = model if model in ("llama", "gpt4") else self.model
+        import os as _os
+        import re as re_mod
 
+        mdl = model if model in ("llama", "gpt4") else self.model
         fd, output_path = tempfile.mkstemp(suffix=".json", prefix="newton_out_")
-        os.close(fd)
+        _os.close(fd)
 
         try:
-            args = [
-                self.cli_path, "summarize", "-",
-                "--model", mdl,
-                "--system-prompt", system_prompt,
-                "--output", output_path,
-            ]
-            if user_prompt:
-                args.extend(["--user-prompt", user_prompt])
+            base = self._build_base_args()
+            args = base + ["summarize", "-", "--model", mdl, "--output", output_path]
+            if system_prompt:
+                args += ["--system-prompt", system_prompt]
 
-            env = os.environ.copy()
+            env = _os.environ.copy()
             if self.token:
                 env["NEWTON_TOKEN"] = self.token
 
-            result = subprocess.run(args, input=system_prompt + "\n" + user_prompt,
-                                   capture_output=True, text=True, shell=False,
-                                   timeout=self.timeout_seconds, env=env, encoding="utf-8")
-
+            result = subprocess.run(args, input=user_prompt, capture_output=True,
+                                   text=True, shell=False, timeout=self.timeout_seconds,
+                                   env=env, encoding="utf-8")
             if result.returncode != 0:
                 raise RuntimeError(f"Newton CLI exit {result.returncode}: {result.stderr[:300]}")
 
             with open(output_path, encoding="utf-8") as f:
                 output = f.read().strip()
-
             if not output:
                 raise RuntimeError("Newton CLI produced empty output")
 
-            fences = re.findall(r'```(?:json)?\s*\n?(.*?)```', output, re.DOTALL)
+            fences = re_mod.findall(r'```(?:json)?\s*\n?(.*?)```', output, re_mod.DOTALL)
             if len(fences) == 1:
                 return fences[0].strip()
             if len(fences) > 1:
-                return max(fences, key=len).strip()
+                raise RuntimeError(f"Newton CLI returned {len(fences)} JSON blocks — expected single valid JSON object.")
 
             stripped = output.strip()
             if stripped.startswith("{"):
                 return stripped
-            raise RuntimeError(f"Output is not JSON: {stripped[:300]}")
+            raise RuntimeError(f"Output is not valid JSON: {stripped[:300]}")
         finally:
             try:
-                os.unlink(output_path)
+                _os.unlink(output_path)
             except OSError:
                 pass

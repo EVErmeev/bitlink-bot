@@ -42,9 +42,15 @@ def build_telegram_client(config: RuntimeConfig):
 
 
 def build_llm_client(config: RuntimeConfig):
+
     from services.llm_service import LLMClient
-    if config.llm_mode == "mock":
-        return LLMClient(mock_mode=True, provider_type="mock")
-    return LLMClient(api_url=config.llm_api_url, api_key=config.llm_api_key,
-                     model=config.llm_model, mock_mode=False,
-                     provider_type=getattr(config, 'llm_provider', 'onebit_newton_cli'))
+    return LLMClient(
+        mock_mode=(config.llm_provider == "mock"),
+        provider_type=config.llm_provider,
+        api_url=config.llm_api_url,
+        api_key=config.onebit_llm_token or config.llm_api_key,
+        model=config.llm_model,
+        cli_path=config.onebit_cli_path,
+        cli_transport=config.onebit_cli_transport,
+        timeout_seconds=config.onebit_cli_timeout_seconds,
+    )
