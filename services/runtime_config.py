@@ -1,8 +1,10 @@
+import os
 from dataclasses import dataclass
 
 
 @dataclass
 class RuntimeConfig:
+    app_profile: str = "demo"  # demo | local_txt_production | custom
     newton_mode: str = "mock"
     newton_token: str = ""
     newton_base_url: str = ""
@@ -34,6 +36,7 @@ class RuntimeConfig:
     def from_settings(cls):
         import settings
         c = cls()
+        c.app_profile = os.getenv("APP_PROFILE", "demo")
         c.newton_mode = "mock" if settings.NEWTON_MOCK else "http_api"
         c.newton_token = settings.NEWTON_TOKEN
         c.newton_base_url = settings.NEWTON_BASE_URL
@@ -62,6 +65,74 @@ class RuntimeConfig:
         c.batch_continue_after_error = settings.BATCH_CONTINUE_AFTER_ERROR
         return c
 
+    def set_profile(self, profile_name: str):
+        self.app_profile = profile_name
+        if profile_name == "demo":
+            self.llm_mode = "mock"
+            self.newton_mode = "mock"
+            self.bitlink_mode = "mock"
+            self.confluence_mode = "mock"
+            self.telegram_mode = "disabled"
+        elif profile_name == "local_txt_production":
+            self.llm_mode = "real"
+            self.confluence_mode = "rest"
+            self.telegram_mode = "disabled"
+            self.newton_mode = "disabled"
+            self.bitlink_mode = "disabled"
+
+    def get_effective_services(self, source_type: str) -> dict:
+        all_services = {
+            "llm": self.llm_mode,
+            "newton": self.newton_mode if source_type in ("local_video",) else "not_applicable",
+            "bitlink": self.bitlink_mode if source_type in ("bitlink",) else "not_applicable",
+            "confluence": self.confluence_mode,
+            "telegram": self.telegram_mode,
+        }
+        return all_services
+
+    def is_demo_for_source(self, source_type: str) -> bool:
+        effective = self.get_effective_services(source_type)
+        mock_services = [k for k, v in effective.items() if v == "mock" and k not in ("newton", "bitlink")]
+        return len(mock_services) > 0
+
+    def is_production_blocked(self, source_type: str) -> bool:
+        effective = self.get_effective_services(source_type)
+        if self.app_profile == "demo":
+            return True
+        if effective.get("llm") == "mock":
+            return True
+        if effective.get("confluence") not in ("disabled", "mock", "rest"):
+            return True
+        return False
+
+    def get_banner_text(self, source_type: str = "local_transcript") -> str:
+        effective = self.get_effective_services(source_type)
+        if self.is_demo_for_source(source_type):
+            parts = ["DEMO"]
+            if effective["llm"] == "mock":
+                parts.append("LLM: mock")
+            if effective["confluence"] == "mock":
+                parts.append("Confluence: mock")
+            parts.append("Dry-run forced")
+            return " | ".join(parts)
+        if self.is_production_blocked(source_type):
+            parts = ["PRODUCTION BLOCKED"]
+            if effective["llm"] == "mock":
+                parts.append("LLM: mock (configure real LLM)")
+            if effective["confluence"] not in ("rest", "disabled"):
+                parts.append("Confluence: not configured")
+            return " | ".join(parts)
+        parts = ["PRODUCTION"]
+        if effective["llm"] == "real":
+            parts.append("LLM: real")
+        if effective["confluence"] == "rest":
+            parts.append("Confluence: REST")
+        elif effective["confluence"] == "disabled":
+            parts.append("Confluence: disabled")
+        if effective["telegram"] == "real":
+            parts.append("Telegram: real")
+        return " | ".join(parts)
+
     def is_demo_mode(self):
         return any([
             self.llm_mode == "mock",
@@ -73,6 +144,7 @@ class RuntimeConfig:
 
     def to_safe_dict(self):
         return {
+            "app_profile": self.app_profile,
             "newton_mode": self.newton_mode,
             "llm_mode": self.llm_mode, "llm_model": self.llm_model,
             "confluence_mode": self.confluence_mode, "confluence_space_key": self.confluence_space_key,
@@ -82,13 +154,16 @@ class RuntimeConfig:
             "is_demo_mode": self.is_demo_mode(),
         }
 
+
 _runtime_config = None
+
 
 def get_runtime_config() -> RuntimeConfig:
     global _runtime_config
     if _runtime_config is None:
         _runtime_config = RuntimeConfig.from_settings()
     return _runtime_config
+
 
 def reload_runtime_config():
     global _runtime_config

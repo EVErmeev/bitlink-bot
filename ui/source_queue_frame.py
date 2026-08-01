@@ -610,7 +610,9 @@ class SourceQueueFrame(ttk.Frame):
             self._show_nothing_to_process(batch)
             return
 
-        preflight = run_preflight(items, config)
+        # Gather unique source types from pending items
+        source_types = list(set(i.source_type or "local_transcript" for i in items))
+        preflight = run_preflight(items, config, source_types=source_types)
 
         if preflight["has_blocking"]:
             self._show_preflight_blocking(preflight)
@@ -702,30 +704,24 @@ class SourceQueueFrame(ttk.Frame):
     def _update_banner(self):
         from services.runtime_config import get_runtime_config
         config = get_runtime_config()
-        if not config.is_demo_mode():
-            self.banner_label.configure(text="")
-            return
+        # Determine source type from first pending item, or default
+        source_type = "local_transcript"
+        batch = self.qc.batch_service.batch_run
+        if batch and batch.items:
+            non_completed = [i for i in batch.items if i.status not in ("completed", "skipped")]
+            if non_completed:
+                source_type = non_completed[0].source_type or "local_transcript"
 
-        parts = ["DEMO / MOCK"]
-        if config.llm_mode == "mock":
-            parts.append("LLM: mock")
-        if config.bitlink_mode == "mock":
-            parts.append("BIT.Link: mock")
+        banner = config.get_banner_text(source_type)
+        self.banner_label.configure(text=banner)
 
-        # Only show service info relevant to the queue's items
-        has_video = any(i.source_type == "local_video" for i in (self.qc.batch_service.batch_run.items if self.qc.batch_service.batch_run else []))
-        has_transcript = any(i.source_type == "local_transcript" for i in (self.qc.batch_service.batch_run.items if self.qc.batch_service.batch_run else []))
-        has_bitlink = any(i.source_type == "bitlink" for i in (self.qc.batch_service.batch_run.items if self.qc.batch_service.batch_run else []))
-
-        if has_video:
-            parts.append(f"Newton: {config.newton_mode}")
-        if has_transcript:
-            parts.append("Newton: не требуется")
-        if has_bitlink:
-            parts.append(f"BIT.Link: {config.bitlink_mode}")
-
-        parts.append(f"Confluence: {config.confluence_mode}")
-        self.banner_label.configure(text=" | ".join(parts))
+        # Color-code the banner
+        if config.is_demo_for_source(source_type):
+            self.banner_label.configure(foreground="#cc6600")  # orange
+        elif config.is_production_blocked(source_type):
+            self.banner_label.configure(foreground="red")
+        else:
+            self.banner_label.configure(foreground="green")
 
     def _stop_processing(self):
         if self.qc.batch_service.batch_run:
