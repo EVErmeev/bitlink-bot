@@ -12,11 +12,15 @@ class LLMConfigurationError(Exception):
 
 
 class LLMClient:
-    def __init__(self, api_url=None, api_key=None, model=None):
-        self.mock_mode = settings.LLM_MOCK
+    def __init__(self, api_url=None, api_key=None, model=None, mock_mode: bool | None = None, timeout_seconds=120):
+        if mock_mode is None:
+            self.mock_mode = settings.LLM_MOCK
+        else:
+            self.mock_mode = mock_mode
         self.api_url = api_url or settings.LLM_API_URL
         self.api_key = api_key or settings.LLM_API_KEY
         self.model = model or settings.LLM_MODEL
+        self.timeout_seconds = timeout_seconds
 
         if not self.mock_mode:
             missing = []
@@ -26,8 +30,7 @@ class LLMClient:
                 missing.append("LLM_API_KEY")
             if missing:
                 raise LLMConfigurationError(
-                    f"LLM_MOCK=false, но отсутствуют настройки: {', '.join(missing)}. "
-                    f"Укажите их в .env или установите LLM_MOCK=true."
+                    f"LLM_MOCK=false but missing: {', '.join(missing)}"
                 )
 
     def generate(self, system_prompt: str, user_prompt: str,
@@ -51,7 +54,7 @@ class LLMClient:
                     "temperature": temperature,
                     "max_tokens": max_tokens,
                 },
-                timeout=120,
+                timeout=self.timeout_seconds,
             )
             resp.raise_for_status()
             data = resp.json()

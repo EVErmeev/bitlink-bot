@@ -44,7 +44,8 @@ def build_telegram_client(config: RuntimeConfig):
 def build_llm_client(config: RuntimeConfig):
     from services.llm_service import LLMClient
     if config.llm_mode == "mock":
-        return LLMClient()
+        return LLMClient(mock_mode=True)
     if not config.llm_api_url or not config.llm_api_key:
         raise ValueError("LLM real mode requires LLM_API_URL and LLM_API_KEY")
-    return LLMClient(api_url=config.llm_api_url, api_key=config.llm_api_key, model=config.llm_model)
+    return LLMClient(api_url=config.llm_api_url, api_key=config.llm_api_key,
+                     model=config.llm_model, mock_mode=False)

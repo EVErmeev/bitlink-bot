@@ -50,8 +50,10 @@ class TestPreflightRegression:
         config.bitlink_mode = "mock"
         assert not config.is_demo_for_source("local_transcript")
 
-    def test_local_transcript_real_llm_does_not_force_dry_run(self, tmp_path):
+    def test_local_transcript_real_llm_does_not_force_dry_run(self, tmp_path, monkeypatch):
         """Relevant mock services only: LLM. If LLM is real, no demo."""
+        from services.llm_service import LLMClient
+        monkeypatch.setattr(LLMClient, "check_connection", lambda self: True)
         config = RuntimeConfig()
         config.llm_mode = "real"
         config.newton_mode = "mock"

@@ -40,6 +40,8 @@ def main():
     from ui.main_window import MainWindow
 
     root = tk.Tk()
+    from ui.clipboard_support import install_clipboard_support
+    install_clipboard_support(root)
     root.withdraw()
 
     state_path = DATA_DIR / "batch_state.json"
