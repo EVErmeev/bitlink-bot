@@ -17,5 +17,188 @@
     "pytest -q",
     "ruff check .",
     "mypy ."
-  ]
+  ],
+  "issues": [
+    {
+      "id": "BB-CRIT-001",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-CRIT-002",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-CRIT-003",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-CRIT-004",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-CRIT-005",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-CRIT-006",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-CRIT-007",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-CRIT-008",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-CRIT-009",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-CRIT-010",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-011",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-012",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-013",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-014",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-015",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-016",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-017",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-018",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-019",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-020",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    }
+  ],
+  "test_results": {
+    "compileall": null,
+    "pytest": null,
+    "ruff": null,
+    "mypy": null
+  },
+  "changed_files": [],
+  "remaining_blockers": [
+    "BB-CRIT-001: mock-only integrations",
+    "BB-CRIT-002: no LLM layer",
+    "BB-CRIT-003: all facts merged into one topic",
+    "BB-CRIT-004: three templates produce empty content",
+    "BB-CRIT-005: validation failure marks item as completed",
+    "BB-CRIT-006: no re-validation after apply_corrections",
+    "BB-CRIT-007: source_context_id from path, not content SHA",
+    "BB-CRIT-008: dry-run not implemented",
+    "BB-CRIT-009: queue recovery not implemented",
+    "BB-CRIT-010: republish is a stub"
+  ],
+  "next_action": "fix BB-CRIT-001: implement real HTTP adapters with explicit mock toggle",
+  "updated_at": "2026-08-01T19:15:00Z"
 }
