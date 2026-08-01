@@ -1,10 +1,13 @@
 import json
-import re
 from pathlib import Path
 
-import requests
-
 import settings
+from services.llm_providers import (
+    LLMProvider,
+    MockLLMProvider,
+    OneBitCLIProvider,
+    OpenAICompatibleProvider,
+)
 
 
 class LLMConfigurationError(Exception):
@@ -12,55 +15,38 @@ class LLMConfigurationError(Exception):
 
 
 class LLMClient:
-    def __init__(self, api_url=None, api_key=None, model=None, mock_mode: bool | None = None, timeout_seconds=120):
+    def __init__(self, api_url=None, api_key=None, model=None, mock_mode=None, timeout_seconds=120,
+                 provider_type=None, cli_path=None, cli_transport="native",
+                 models_path="/v1/models", chat_path="/v1/chat/completions"):
         if mock_mode is None:
-            self.mock_mode = settings.LLM_MOCK
-        else:
-            self.mock_mode = mock_mode
-        self.api_url = api_url or settings.LLM_API_URL
-        self.api_key = api_key or settings.LLM_API_KEY
+            mock_mode = settings.LLM_MOCK
+        self.mock_mode = mock_mode
         self.model = model or settings.LLM_MODEL
         self.timeout_seconds = timeout_seconds
+        self.api_url = api_url or settings.LLM_API_URL
+        self.api_key = api_key or settings.LLM_API_KEY
 
-        if not self.mock_mode:
-            missing = []
-            if not self.api_url:
-                missing.append("LLM_API_URL")
-            if not self.api_key:
-                missing.append("LLM_API_KEY")
-            if missing:
-                raise LLMConfigurationError(
-                    f"LLM_MOCK=false but missing: {', '.join(missing)}"
-                )
+        pt = provider_type or getattr(settings, 'LLM_PROVIDER', None) or ("mock" if mock_mode else "openai_compatible")
+        self.provider_type = pt
+
+        if (not provider_type and mock_mode) or pt == "mock":
+            self._provider: LLMProvider = MockLLMProvider(model=self.model)
+        elif pt == "openai_compatible":
+            self._provider = OpenAICompatibleProvider(
+                base_url=self.api_url, api_key=self.api_key, model=self.model,
+                models_path=models_path, chat_path=chat_path, timeout_seconds=timeout_seconds)
+        elif pt == "onebit_cli":
+            self._provider = OneBitCLIProvider(
+                cli_path=cli_path or getattr(settings, 'ONEBIT_CLI_PATH', 'newton'),
+                transport=cli_transport or getattr(settings, 'ONEBIT_CLI_TRANSPORT', 'native'),
+                model=self.model, timeout_seconds=timeout_seconds)
+        else:
+            raise LLMConfigurationError(f"Unknown LLM provider: {pt}")
 
     def generate(self, system_prompt: str, user_prompt: str,
                  temperature: float = 0.3, max_tokens: int = 4096) -> str:
-        if self.mock_mode:
-            return self._mock_generate(system_prompt, user_prompt)
-
-        try:
-            resp = requests.post(
-                f"{self.api_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                },
-                timeout=self.timeout_seconds,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            return data["choices"][0]["message"]["content"]
-        except Exception as e:
-            raise RuntimeError(f"LLM API error: {e}") from e
+        return self._provider.generate(system_prompt, user_prompt, model=self.model,
+                                       temperature=temperature, max_tokens=max_tokens)
 
     def generate_json(self, system_prompt, user_prompt, json_schema, *,
                       temperature=0.1, max_retries=3) -> tuple[dict, str]:
@@ -113,72 +99,5 @@ class LLMClient:
         with open(debug_path / "llm_schema_validation.json", "w", encoding="utf-8") as f:
             json.dump(schema_result, f, indent=2, ensure_ascii=False)
 
-    def _mock_generate(self, system_prompt: str, user_prompt: str) -> str:
-        try:
-            schema_match = re.search(
-                r'Return valid JSON conforming to this schema:\s*(\{.*\})',
-                user_prompt,
-                re.DOTALL,
-            )
-            if schema_match:
-                schema = json.loads(schema_match.group(1))
-                result = self._build_mock_from_schema(schema)
-                return json.dumps(result, ensure_ascii=False)
-        except Exception:
-            pass
-        return json.dumps({
-            "protocol_title": "Mock Protocol",
-            "meeting_purpose": "Mock meeting discussion",
-            "key_outcomes": "Mock outcomes",
-            "topic_blocks": [{
-                "topic_id": "tb_1",
-                "title": "Mock Topic",
-                "discussion_content": "Mock discussion content about the project status.",
-                "conclusion": "Mock conclusion: all items reviewed.",
-                "status_text": "Mock status",
-            }],
-        }, ensure_ascii=False)
-
-    def _build_mock_from_schema(self, schema):
-        result = {}
-        props = schema.get("properties", {})
-        for key, prop_schema in props.items():
-            if key in schema.get("required", []):
-                if prop_schema.get("type") == "string":
-                    result[key] = f"Mock {key}"
-                elif prop_schema.get("type") == "array":
-                    result[key] = []
-                elif prop_schema.get("type") == "object":
-                    result[key] = {}
-        if "topic_blocks" in props and "topic_blocks" in schema.get("required", []):
-            result["topic_blocks"] = [{
-                "topic_id": "tb_mock_1",
-                "title": "Mock Topic",
-                "discussion_content": "This is mock discussion content for testing the template schema validation.",
-                "conclusion": "Mock conclusion text with sufficient detail.",
-                "status_text": "Mock status",
-            }]
-        if "general_info" in props:
-            result["general_info"] = {
-                "meeting_date": "2026-08-01",
-                "protocol_title": "Mock Protocol",
-                "meeting_context": "Mock context",
-            }
-        if "purpose_and_context" in props:
-            result["purpose_and_context"] = "Mock purpose and context"
-        if "current_state" in props and "current_state" in schema.get("required", []):
-            result["current_state"] = "Mock current state description"
-        return result
-
     def check_connection(self) -> bool:
-        if self.mock_mode:
-            return True
-        try:
-            resp = requests.get(
-                f"{self.api_url}/models",
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                timeout=10,
-            )
-            return resp.status_code == 200
-        except Exception:
-            return False
+        return self._provider.check_connection().ok
