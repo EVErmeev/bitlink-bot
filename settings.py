@@ -42,6 +42,9 @@ NEWTON_BASE_URL: str = _str("NEWTON_BASE_URL")
 NEWTON_MOCK: bool = _bool("NEWTON_MOCK", True)
 
 # ── Confluence ──
+CONFLUENCE_PROVIDER: str = _str("CONFLUENCE_PROVIDER", "mock")
+CONFLUENCE_MCP_SERVER: str = _str("CONFLUENCE_MCP_SERVER")
+CONFLUENCE_MCP_TIMEOUT_SECONDS: int = int(_str("CONFLUENCE_MCP_TIMEOUT_SECONDS", "60"))
 CONFLUENCE_TOKEN: str = _str("CONFLUENCE_TOKEN")
 CONFLUENCE_BASE_URL: str = _str("CONFLUENCE_BASE_URL")
 CONFLUENCE_SPACE_KEY: str = _str("CONFLUENCE_SPACE_KEY")
@@ -73,22 +76,23 @@ BATCH_CONTINUE_AFTER_ERROR: bool = _bool("BATCH_CONTINUE_AFTER_ERROR", True)
 
 def validate_settings(source_type: str) -> list[str]:
     missing = []
+    is_live = CONFLUENCE_PROVIDER != "mock"
     if source_type == "bitlink":
         if not BITLINK_BASE_URL and not BITLINK_MOCK:
             missing.append("BITLINK_BASE_URL")
         if not NEWTON_BASE_URL and not NEWTON_MOCK:
             missing.append("NEWTON_BASE_URL")
-        if not CONFLUENCE_BASE_URL and not CONFLUENCE_MOCK:
+        if not CONFLUENCE_BASE_URL and is_live:
             missing.append("CONFLUENCE_BASE_URL")
     elif source_type == "local_video":
         if not NEWTON_BASE_URL and not NEWTON_MOCK:
             missing.append("NEWTON_BASE_URL")
-        if not CONFLUENCE_BASE_URL and not CONFLUENCE_MOCK:
+        if not CONFLUENCE_BASE_URL and is_live:
             missing.append("CONFLUENCE_BASE_URL")
     elif source_type == "local_transcript":
-        if not CONFLUENCE_BASE_URL and not CONFLUENCE_MOCK:
+        if not CONFLUENCE_BASE_URL and is_live:
             missing.append("CONFLUENCE_BASE_URL")
     if source_type in ("bitlink", "local_video", "local_transcript"):
-        if not CONFLUENCE_BASE_URL and not CONFLUENCE_MOCK:
+        if not CONFLUENCE_BASE_URL and is_live:
             missing.append("CONFLUENCE_BASE_URL")
     return missing

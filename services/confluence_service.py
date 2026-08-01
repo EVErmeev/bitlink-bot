@@ -1,5 +1,7 @@
 import uuid
 
+import requests
+
 import settings
 
 
@@ -9,12 +11,18 @@ class ConfluenceConfigurationError(Exception):
 
 class ConfluenceClient:
     def __init__(self, base_url=None, token=None, space_key=None):
-        self.mock_mode = settings.CONFLUENCE_MOCK
+        self.provider = settings.CONFLUENCE_PROVIDER
+        if self.provider not in ("mock", "rest", "mcp"):
+            raise ConfluenceConfigurationError(
+                f"Unknown CONFLUENCE_PROVIDER: {self.provider}"
+            )
+
+        self.mock_mode = (self.provider == "mock")
         self.base_url = base_url or settings.CONFLUENCE_BASE_URL
         self.token = token or settings.CONFLUENCE_TOKEN
         self.space_key = space_key or settings.CONFLUENCE_SPACE_KEY
 
-        if not self.mock_mode:
+        if self.provider == "rest":
             missing = []
             if not self.base_url:
                 missing.append("CONFLUENCE_BASE_URL")
@@ -24,43 +32,111 @@ class ConfluenceClient:
                 missing.append("CONFLUENCE_SPACE_KEY")
             if missing:
                 raise ConfluenceConfigurationError(
-                    f"CONFLUENCE_MOCK=false, но отсутствуют настройки: {', '.join(missing)}. "
-                    f"Укажите их в .env или установите CONFLUENCE_MOCK=true."
+                    f"CONFLUENCE_PROVIDER=rest but missing: {', '.join(missing)}"
                 )
+        elif self.provider == "mcp":
+            raise NotImplementedError(
+                "CONFLUENCE_PROVIDER=mcp is not supported as runtime transport. "
+                "MCP is only available via OpenCode tools. Use CONFLUENCE_PROVIDER=rest."
+            )
 
     def check_connection(self) -> bool:
-        if self.mock_mode:
+        if self.provider == "mock":
             return True
-        return bool(self.base_url and self.token)
+        if self.provider == "rest":
+            try:
+                resp = requests.get(
+                    f"{self.base_url}/rest/api/user/current",
+                    headers={"Authorization": f"Bearer {self.token}"},
+                    timeout=10,
+                )
+                return resp.status_code == 200
+            except Exception:
+                return False
+        return False
+
+    def create_page(self, title: str, storage_html: str,
+                    parent_page_id: str | None = None,
+                    space_key: str | None = None,
+                    idempotency_key: str | None = None) -> dict:
+        space = space_key or self.space_key
+        if self.provider == "mock":
+            page_id = str(uuid.uuid4())[:8]
+            return {
+                "id": page_id,
+                "title": title,
+                "url": f"https://mock-confluence.example.com/spaces/{space}/pages/{page_id}",
+                "space": space,
+            }
+
+        if self.provider == "rest":
+            body = {
+                "type": "page",
+                "title": title,
+                "space": {"key": space},
+                "body": {
+                    "storage": {"value": storage_html, "representation": "storage"}
+                },
+            }
+            if parent_page_id:
+                body["ancestors"] = [{"id": int(parent_page_id)}]  # type: ignore[list-item]
+            resp = requests.post(
+                f"{self.base_url}/rest/api/content",
+                headers={
+                    "Authorization": f"Bearer {self.token}",
+                    "Content-Type": "application/json",
+                },
+                json=body,  # type: ignore[arg-type]
+                timeout=60,
+            )
+            if resp.status_code not in (200, 201):
+                raise RuntimeError(
+                    f"Confluence create page failed: {resp.status_code} {resp.text[:500]}"
+                )
+            data = resp.json()
+            page_id = str(data["id"])
+            url = f"{self.base_url}/spaces/{space}/pages/{page_id}"
+            return {"id": page_id, "title": title, "url": url, "space": space}
+        raise NotImplementedError(f"Provider {self.provider} not implemented")
 
     def get_page(self, page_id: str) -> dict | None:
-        if self.mock_mode:
-            return {"id": page_id, "title": "Мок-страница", "space": self.space_key or "MOCK"}
-        raise NotImplementedError(
-            "Реальный API Confluence не реализован. "
-            "Используйте CONFLUENCE_MOCK=true для mock-режима."
+        if self.provider == "mock":
+            return {
+                "id": page_id,
+                "title": "Mock Page",
+                "space": self.space_key or "MOCK",
+            }
+        resp = requests.get(
+            f"{self.base_url}/rest/api/content/{page_id}?expand=body.storage,ancestors,space",
+            headers={"Authorization": f"Bearer {self.token}"},
+            timeout=30,
         )
+        if resp.status_code != 200:
+            return None
+        return resp.json()
 
-    def find_page_by_title(self, title: str, space_key: str | None = None) -> list[dict]:
-        if self.mock_mode:
-            return [
-                {"id": "page_1", "title": "Протоколы встреч 2026", "space": space_key or self.space_key or "MOCK"},
-                {"id": "page_2", "title": "Рабочая группа ERP", "space": space_key or self.space_key or "MOCK"},
-            ]
-        raise NotImplementedError(
-            "Поиск страниц через реальный API Confluence не реализован."
+    def find_page_by_title(self, title: str,
+                           space_key: str | None = None) -> list[dict]:
+        if self.provider == "mock":
+            return [{
+                "id": "page_1",
+                "title": title,
+                "space": space_key or self.space_key or "MOCK",
+            }]
+        space = space_key or self.space_key
+        cql = f'title~"{title}"'
+        if space:
+            cql += f' AND space="{space}"'
+        resp = requests.get(
+            f"{self.base_url}/rest/api/content/search?cql={requests.utils.quote(cql)}&limit=10",
+            headers={"Authorization": f"Bearer {self.token}"},
+            timeout=30,
         )
-
-    def create_page(self, title: str, storage_html: str, parent_page_id: str | None = None,
-                    space_key: str | None = None) -> dict:
-        space = space_key or self.space_key or "MOCK"
-        if self.mock_mode:
-            page_id = str(uuid.uuid4())[:8]
-            url = f"https://mock-confluence.example.com/spaces/{space}/pages/{page_id}"
-            return {"id": page_id, "title": title, "url": url, "space": space}
-        raise NotImplementedError(
-            "Публикация страниц через реальный API Confluence не реализована. "
-            "API-контракты Confluence REST API (POST /wiki/rest/api/content с ancestors) "
-            "не подтверждены в рамках данного проекта. "
-            "Используйте CONFLUENCE_MOCK=true для mock-режима."
-        )
+        if resp.status_code != 200:
+            return []
+        results = resp.json().get("results", [])
+        return [{
+            "id": str(r["id"]),
+            "title": r["title"],
+            "space": r.get("space", {}).get("key", ""),
+        } for r in results]

@@ -31,14 +31,19 @@ jobs:
       - name: Python compileall
         run: python -m compileall .
 
-      - name: Validate JSON with json.tool
-        run: python -m json.tool docs/opencode/manifest.json
+      - name: JSON manifest validation
+        run: python -c "import json; json.load(open('docs/opencode/manifest.json',encoding='utf-8')); print('JSON: PASS')"
 
       - name: Validate manifest schema
-        run: python -c "import json, jsonschema; m=json.load(open('docs/opencode/manifest.json', encoding='utf-8')); s=json.load(open('docs/opencode/schemas/manifest.schema.json', encoding='utf-8')); jsonschema.validate(m,s); print('OK')"
+        run: python -c "import json,jsonschema; m=json.load(open('docs/opencode/manifest.json',encoding='utf-8')); s=json.load(open('docs/opencode/schemas/manifest.schema.json',encoding='utf-8')); jsonschema.validate(m,s); print('Schema: PASS')"
 
       - name: Run tests
         run: pytest -q
+
+      - name: Windows launcher smoke test
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call start_app.bat --startup-check
 
       - name: Ruff check
         run: ruff check .

@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import requests
@@ -110,19 +111,61 @@ class LLMClient:
             json.dump(schema_result, f, indent=2, ensure_ascii=False)
 
     def _mock_generate(self, system_prompt: str, user_prompt: str) -> str:
-        if '"json"' in user_prompt.lower() or '"schema"' in user_prompt.lower() \
-                or 'json schema' in user_prompt.lower() or 'valid json' in user_prompt.lower() \
-                or 'return valid json' in user_prompt.lower():
-            return json.dumps({
-                "mock": True,
-                "message": "Mock JSON response from LLM mock mode",
-                "model": self.model or "mock",
-            })
-        return (
-            "Протокол встречи (учебный mock-шаблон). "
-            f"Модель: {self.model or 'mock'}. "
-            "В реальном режиме здесь будет результат LLM-генерации."
-        )
+        try:
+            schema_match = re.search(
+                r'Return valid JSON conforming to this schema:\s*(\{.*\})',
+                user_prompt,
+                re.DOTALL,
+            )
+            if schema_match:
+                schema = json.loads(schema_match.group(1))
+                result = self._build_mock_from_schema(schema)
+                return json.dumps(result, ensure_ascii=False)
+        except Exception:
+            pass
+        return json.dumps({
+            "protocol_title": "Mock Protocol",
+            "meeting_purpose": "Mock meeting discussion",
+            "key_outcomes": "Mock outcomes",
+            "topic_blocks": [{
+                "topic_id": "tb_1",
+                "title": "Mock Topic",
+                "discussion_content": "Mock discussion content about the project status.",
+                "conclusion": "Mock conclusion: all items reviewed.",
+                "status_text": "Mock status",
+            }],
+        }, ensure_ascii=False)
+
+    def _build_mock_from_schema(self, schema):
+        result = {}
+        props = schema.get("properties", {})
+        for key, prop_schema in props.items():
+            if key in schema.get("required", []):
+                if prop_schema.get("type") == "string":
+                    result[key] = f"Mock {key}"
+                elif prop_schema.get("type") == "array":
+                    result[key] = []
+                elif prop_schema.get("type") == "object":
+                    result[key] = {}
+        if "topic_blocks" in props and "topic_blocks" in schema.get("required", []):
+            result["topic_blocks"] = [{
+                "topic_id": "tb_mock_1",
+                "title": "Mock Topic",
+                "discussion_content": "This is mock discussion content for testing the template schema validation.",
+                "conclusion": "Mock conclusion text with sufficient detail.",
+                "status_text": "Mock status",
+            }]
+        if "general_info" in props:
+            result["general_info"] = {
+                "meeting_date": "2026-08-01",
+                "protocol_title": "Mock Protocol",
+                "meeting_context": "Mock context",
+            }
+        if "purpose_and_context" in props:
+            result["purpose_and_context"] = "Mock purpose and context"
+        if "current_state" in props and "current_state" in schema.get("required", []):
+            result["current_state"] = "Mock current state description"
+        return result
 
     def check_connection(self) -> bool:
         if self.mock_mode:
