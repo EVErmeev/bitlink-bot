@@ -18,6 +18,7 @@ try:
     )
     from services.fact_extraction import extract_atomic_items
     from services.fact_validation import validate_facts, apply_corrections
+    from services.topic_coverage import audit_topic_coverage, validate_topic_source_alignment
     from services.bitlink_service import BitlinkClient
     from services.transcription_service import TranscriptionClient
     from services.confluence_service import ConfluenceClient
@@ -38,6 +39,7 @@ except ImportError:
     )
     from fact_extraction import extract_atomic_items
     from fact_validation import validate_facts, apply_corrections
+    from topic_coverage import audit_topic_coverage, validate_topic_source_alignment
     from bitlink_service import BitlinkClient
     from transcription_service import TranscriptionClient
     from confluence_service import ConfluenceClient
@@ -88,6 +90,7 @@ class ProcessingService:
 
             self._report_progress("extracting_items", 25, item)
             source_ctx_id = item.source_context_id or generate_source_context_id(
+                source_type=item.source_type,
                 source_path=str(item.source_path) if item.source_path else None,
                 bitlink_recording_id=item.bitlink_recording_id,
                 source_sha256=item.source_sha256,
@@ -153,6 +156,11 @@ class ProcessingService:
             protocol.source_alignment_passed = post_correction_source_report.passed
             protocol.structure_validation_passed = post_correction_struct_report.passed
 
+            topic_coverage = audit_topic_coverage(protocol)
+            topic_alignment = validate_topic_source_alignment(protocol)
+            protocol.topic_coverage_passed = topic_coverage["coverage_passed"]
+            protocol.topic_alignment_passed = topic_alignment["alignment_passed"]
+
             self._report_progress("rendering", 85, item)
             html = template.render_html(protocol)
 
@@ -164,10 +172,44 @@ class ProcessingService:
                 and protocol.fact_validation_passed
                 and protocol.structure_validation_passed
                 and protocol.render_validation_passed
+                and protocol.topic_coverage_passed
+                and protocol.topic_alignment_passed
             )
 
             if item.debug_directory:
                 self._save_artifacts(item.debug_directory, protocol, html, transcript_text)
+
+            if publishable:
+                if item.debug_directory:
+                    from meeting_metadata import compute_sha256_from_bytes
+                    validated_dir = item.debug_directory / "validated"
+                    validated_dir.mkdir(parents=True, exist_ok=True)
+                    with open(validated_dir / "protocol_final_validated.json", "w", encoding="utf-8") as f:
+                        json.dump(protocol.to_dict(), f, indent=2, ensure_ascii=False)
+                    with open(validated_dir / "protocol_final_validated.html", "w", encoding="utf-8") as f:
+                        f.write(html)
+                    manifest = {
+                        "protocol_id": protocol.protocol_id,
+                        "source_context_id": protocol.source_context_id,
+                        "template_id": protocol.template_id,
+                        "html_sha256": compute_sha256_from_bytes(html.encode("utf-8")),
+                        "json_sha256": compute_sha256_from_bytes(
+                            json.dumps(protocol.to_dict(), sort_keys=True).encode("utf-8")
+                        ),
+                        "validation_flags": {
+                            "source_alignment_passed": protocol.source_alignment_passed,
+                            "fact_validation_passed": protocol.fact_validation_passed,
+                            "structure_validation_passed": protocol.structure_validation_passed,
+                            "render_validation_passed": protocol.render_validation_passed,
+                            "topic_coverage_passed": getattr(protocol, "topic_coverage_passed", True),
+                            "topic_alignment_passed": getattr(protocol, "topic_alignment_passed", True),
+                        },
+                        "generation_succeeded": True,
+                        "validation_succeeded": True,
+                        "publication_succeeded": False,
+                    }
+                    with open(validated_dir / "validated_artifacts_manifest.json", "w", encoding="utf-8") as f:
+                        json.dump(manifest, f, indent=2, ensure_ascii=False)
 
             if publishable and not item.dry_run:
                 self._report_progress("publishing_confluence", 90, item)
@@ -239,49 +281,68 @@ class ProcessingService:
 
     def republish(self, item: BatchItem) -> dict:
         if not item.debug_directory:
-            return {"success": False, "error": "Нет debug-каталога с готовыми артефактами"}
+            return {"success": False, "error": "No debug directory"}
 
-        proto_path = item.debug_directory / "protocol.json"
-        html_path = item.debug_directory / "protocol_preview.html"
+        validated_dir = item.debug_directory / "validated"
+        manifest_path = validated_dir / "validated_artifacts_manifest.json"
+        json_path = validated_dir / "protocol_final_validated.json"
+        html_path = validated_dir / "protocol_final_validated.html"
 
-        if not proto_path.exists() or not html_path.exists():
-            return {"success": False, "error": "Готовые артефакты (JSON/HTML) не найдены"}
+        if not manifest_path.exists():
+            return {"success": False, "error": "No validated_artifacts_manifest.json — protocol was not validated"}
+        if not json_path.exists() or not html_path.exists():
+            return {"success": False, "error": "Missing validated artifacts (JSON/HTML)"}
 
-        try:
-            import json
-            proto_data = json.loads(proto_path.read_text(encoding="utf-8"))
-            html = html_path.read_text(encoding="utf-8")
+        import json as json_mod
+        from meeting_metadata import compute_sha256_from_bytes
 
-            if item.dry_run:
-                return {"success": True, "url": None, "message": "Dry-run: публикация пропущена"}
+        manifest = json_mod.loads(manifest_path.read_text(encoding="utf-8"))
+        if not manifest.get("validation_succeeded"):
+            return {"success": False, "error": "Protocol did not pass validation — republish rejected"}
+        if not manifest.get("generation_succeeded"):
+            return {"success": False, "error": "Protocol generation was not successful — republish rejected"}
 
-            parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
-            title = proto_data.get("protocol_title", item.display_name or "Протокол встречи")
-            page = self.confluence.create_page(
-                title=title,
-                storage_html=html,
-                parent_page_id=parent_id,
-            )
-            item.result_url = page.get("url", "")
+        html_content = html_path.read_text(encoding="utf-8")
+        json_content = json_path.read_text(encoding="utf-8")
 
-            if item.send_telegram:
-                try:
-                    meeting_date = proto_data.get("meeting_date", "")
-                    key_outcomes = proto_data.get("key_outcomes", "")[:200]
-                    self.telegram.send_notification(
-                        protocol_title=title,
-                        meeting_date=meeting_date,
-                        key_result=key_outcomes or "Протокол сформирован",
-                        confluence_url=item.result_url,
-                    )
-                except Exception as te:
-                    print(f"Telegram notification failed: {te}")
+        html_sha = compute_sha256_from_bytes(html_content.encode("utf-8"))
+        json_sha = compute_sha256_from_bytes(json_content.encode("utf-8"))
 
-            item.status = "completed"
-            return {"success": True, "url": item.result_url}
+        if html_sha != manifest.get("html_sha256"):
+            return {"success": False, "error": "HTML was modified after validation — republish rejected"}
+        if json_sha != manifest.get("json_sha256"):
+            return {"success": False, "error": "JSON was modified after validation — republish rejected"}
 
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+        validation_flags = manifest.get("validation_flags", {})
+        for flag_name in ["source_alignment_passed", "fact_validation_passed",
+                          "structure_validation_passed", "render_validation_passed"]:
+            if not validation_flags.get(flag_name, False):
+                return {"success": False, "error": f"Validation flag {flag_name} is False — republish rejected"}
+
+        if item.dry_run:
+            return {"success": True, "url": None, "message": "Dry-run: publishing skipped"}
+
+        proto_data = json_mod.loads(json_content)
+        parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
+        title = proto_data.get("protocol_title", item.display_name or "Protocol")
+        page = self.confluence.create_page(
+            title=title, storage_html=html_content, parent_page_id=parent_id
+        )
+        item.result_url = page.get("url", "")
+
+        if item.send_telegram:
+            try:
+                self.telegram.send_notification(
+                    protocol_title=title,
+                    meeting_date=proto_data.get("meeting_date", ""),
+                    key_result=(proto_data.get("key_outcomes", "") or "")[:200],
+                    confluence_url=item.result_url,
+                )
+            except Exception as te:
+                print(f"Telegram notification failed: {te}")
+
+        item.status = "completed"
+        return {"success": True, "url": item.result_url}
 
     def _load_transcript(self, item: BatchItem) -> str:
         if item.source_type == "local_transcript":

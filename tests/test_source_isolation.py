@@ -21,7 +21,7 @@ class TestSourceIsolation:
         id1 = generate_source_context_id(source_path="/path/to/file1.txt")
         id2 = generate_source_context_id(source_path="/path/to/file2.txt")
         assert id1 != id2
-        assert len(id1) == 16
+        assert len(id1) == 32
 
     def test_consistent_id_for_same_path(self):
         id1 = generate_source_context_id(source_path="/same/path.txt")
@@ -30,7 +30,7 @@ class TestSourceIsolation:
 
     def test_generate_from_bitlink_id(self):
         id1 = generate_source_context_id(bitlink_recording_id="rec_123")
-        assert len(id1) == 16
+        assert len(id1) == 32
 
     def test_validate_alignment_all_match(self):
         ctx = "abc123def4567890"

@@ -4,8 +4,8 @@
   "default_branch": "main",
   "audit_id": "AUDIT-2026-08-01-e7cc95f",
   "audit_file": "docs/opencode/audits/AUDIT-2026-08-01-e7cc95f.md",
-  "active_task_id": "TASK-2026-08-01-e7cc95f",
-  "active_task_file": "docs/opencode/tasks/TASK-2026-08-01-e7cc95f.md",
+  "active_task_id": "TASK-2026-08-01-704e99b",
+  "active_task_file": "docs/opencode/tasks/TASK-2026-08-01-704e99b.md",
   "base_commit": "2644b52dee92f7f6d2709496335f90364c47057f",
   "head_commit": "91fd494743470f9cb403ff85b7efecc63c0a01f0",
   "working_branch": "fix/audit-e7cc95f",
@@ -119,6 +119,7 @@
       "changed_files": ["services/processing_service.py", "ui/result_frame.py"],
       "tests": [],
       "executor_comment": "Реализован republish() в ProcessingService: читает protocol.json и protocol_preview.html из debug-каталога, публикует без вызова LLM/транскрибации/валидации. result_frame вызывает republish для выбранного элемента."
+    },
     {
       "id": "BB-MAJ-011",
       "status": "OPEN",
@@ -201,12 +202,28 @@
     }
   ],
   "test_results": {
-    "compileall": null,
-    "pytest": null,
-    "ruff": null,
-    "mypy": null
+    "compileall": "PASS",
+    "pytest": "168 passed, 0 failed",
+    "ruff": "not run",
+    "mypy": "not run"
   },
-  "changed_files": [],
+  "changed_files": [
+    "services/llm_service.py",
+    "services/topic_coverage.py",
+    "services/source_isolation.py",
+    "services/processing_service.py",
+    "models/protocol.py",
+    "tests/test_llm_json.py",
+    "tests/test_topic_coverage.py",
+    "tests/test_critical_fixes.py",
+    "tests/test_post_correction.py",
+    "tests/test_source_isolation.py",
+    "docs/opencode/manifest.json",
+    "docs/opencode/validations/VALIDATION-2026-08-01-704e99b.md",
+    "docs/opencode/tasks/TASK-2026-08-01-704e99b.md",
+    ".github/workflows/ci.yml",
+    "requirements.txt"
+  ],
   "remaining_blockers": [
     "BB-MAJ-011: ETA history not persisted",
     "BB-MAJ-012: BIT.Link recording date not used",

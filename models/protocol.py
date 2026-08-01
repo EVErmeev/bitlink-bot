@@ -164,6 +164,8 @@ class Protocol:
     fact_validation_passed: bool = False
     structure_validation_passed: bool = False
     render_validation_passed: bool = False
+    topic_coverage_passed: bool = False
+    topic_alignment_passed: bool = False
 
     # Atomic items used to generate
     atomic_items: list[AtomicItem] = field(default_factory=list)
@@ -287,6 +289,8 @@ class Protocol:
             "fact_validation_passed": self.fact_validation_passed,
             "structure_validation_passed": self.structure_validation_passed,
             "render_validation_passed": self.render_validation_passed,
+            "topic_coverage_passed": self.topic_coverage_passed,
+            "topic_alignment_passed": self.topic_alignment_passed,
         }
 
     @classmethod
@@ -325,6 +329,8 @@ class Protocol:
         p.fact_validation_passed = d.get("fact_validation_passed", False)
         p.structure_validation_passed = d.get("structure_validation_passed", False)
         p.render_validation_passed = d.get("render_validation_passed", False)
+        p.topic_coverage_passed = d.get("topic_coverage_passed", False)
+        p.topic_alignment_passed = d.get("topic_alignment_passed", False)
 
         for tb in d.get("topic_blocks", []):
             p.topic_blocks.append(TopicBlock(

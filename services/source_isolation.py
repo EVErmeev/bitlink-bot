@@ -4,13 +4,16 @@ from pathlib import Path
 from models.validation import ValidationReport, ValidationStatus
 
 
-def generate_source_context_id(source_path: str | None = None,
+def generate_source_context_id(source_type: str = "",
+                               source_path: str | None = None,
                                bitlink_recording_id: str | None = None,
                                source_sha256: str | None = None) -> str:
+    external_id = source_path or bitlink_recording_id or ""
     if source_sha256:
-        return source_sha256[:16]
-    seed = source_path or bitlink_recording_id or str(uuid.uuid4())
-    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+        seed = f"{source_type}:{source_sha256}:{external_id}"
+    else:
+        seed = f"{source_type}::{external_id or str(uuid.uuid4())}"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:32]
 
 
 def validate_source_alignment(protocol, expected_source_context_id: str) -> ValidationReport:
