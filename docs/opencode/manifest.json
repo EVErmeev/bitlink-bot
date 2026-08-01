@@ -7,7 +7,7 @@
   "active_task_id": "TASK-2026-08-01-e7cc95f",
   "active_task_file": "docs/opencode/tasks/TASK-2026-08-01-e7cc95f.md",
   "base_commit": "2644b52dee92f7f6d2709496335f90364c47057f",
-  "head_commit": "4990751e472cb95c79a2e94fce664b9cae867dc8",
+  "head_commit": "e994358184148fa43841941f9e8f8e3e24fd16ad",
   "working_branch": "fix/audit-e7cc95f",
   "pull_request_url": null,
   "status": "in_progress",
@@ -21,11 +21,17 @@
   "issues": [
     {
       "id": "BB-CRIT-001",
-      "status": "OPEN",
-      "fix_commit": null,
-      "changed_files": [],
-      "tests": [],
-      "executor_comment": ""
+      "status": "FIXED",
+      "fix_commit": "e994358184148fa43841941f9e8f8e3e24fd16ad",
+      "changed_files": [
+        "services/bitlink_service.py",
+        "services/transcription_service.py",
+        "services/confluence_service.py",
+        "services/telegram_service.py",
+        ".env.example"
+      ],
+      "tests": ["tests/test_services.py"],
+      "executor_comment": "Все сервисы читают *_MOCK из settings. При *_MOCK=false и отсутствии конфига — ConfigurationError. При *_MOCK=false и наличии конфига — NotImplementedError (реальные API не подтверждены). TelegramClient реализует реальную отправку через requests. Mock по умолчанию = true."
     },
     {
       "id": "BB-CRIT-002",
@@ -188,7 +194,6 @@
   },
   "changed_files": [],
   "remaining_blockers": [
-    "BB-CRIT-001: mock-only integrations",
     "BB-CRIT-002: no LLM layer",
     "BB-CRIT-003: all facts merged into one topic",
     "BB-CRIT-004: three templates produce empty content",
@@ -199,6 +204,6 @@
     "BB-CRIT-009: queue recovery not implemented",
     "BB-CRIT-010: republish is a stub"
   ],
-  "next_action": "fix BB-CRIT-001: implement real HTTP adapters with explicit *_MOCK toggle and error on missing config",
+  "next_action": "fix BB-CRIT-002: implement LLM layer with configurable provider",
   "updated_at": "2026-08-01T19:20:00Z"
 }
