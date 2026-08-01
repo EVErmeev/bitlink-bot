@@ -1,19 +1,41 @@
 from pathlib import Path
+import settings
+
+
+class TranscriptionConfigurationError(Exception):
+    pass
 
 
 class TranscriptionClient:
     def __init__(self, token=None, base_url=None, newton_path=None):
-        self.token = token
-        self.base_url = base_url
-        self.newton_path = newton_path
-        self.mock_mode = True
+        self.mock_mode = settings.NEWTON_MOCK
+        self.token = token or settings.NEWTON_TOKEN
+        self.base_url = base_url or settings.NEWTON_BASE_URL
+        self.newton_path = newton_path or settings.NEWTON_PATH
+
+        if not self.mock_mode:
+            missing = []
+            if not self.token:
+                missing.append("NEWTON_TOKEN")
+            if not self.base_url:
+                missing.append("NEWTON_BASE_URL")
+            if missing:
+                raise TranscriptionConfigurationError(
+                    f"NEWTON_MOCK=false, но отсутствуют настройки: {', '.join(missing)}. "
+                    f"Укажите их в .env или установите NEWTON_MOCK=true."
+                )
 
     def check_connection(self) -> bool:
-        return self.mock_mode
+        if self.mock_mode:
+            return True
+        return bool(self.token and self.base_url)
 
     def transcribe_video(self, video_path: Path, output_dir: Path) -> str:
-        name = video_path.stem
-        transcript = f"""[Mock transcript from video: {name}]
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        if self.mock_mode:
+            name = video_path.stem
+            transcript = f"""[Mock transcript from video: {name}]
 
 [00:00] Ведущий: Добрый день, коллеги. Начинаем встречу по обсуждению текущего статуса проекта.
 [00:15] Участник 1: У нас есть несколько вопросов, требующих решения.
@@ -34,8 +56,10 @@ class TranscriptionClient:
 [07:30] Ведущий: Вопрос остаётся открытым, требуется оценка от команды разработки.
 [08:00] Ведущий: Хорошо, на этом завершаем. Спасибо всем.
 """
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        tpath = output_dir / f"{name}_transcript.txt"
-        tpath.write_text(transcript, encoding="utf-8")
-        return transcript
+            tpath = output_dir / f"{name}_transcript.txt"
+            tpath.write_text(transcript, encoding="utf-8")
+            return transcript
+        raise NotImplementedError(
+            "Реальная транскрибация через Newton API не реализована. "
+            "Используйте NEWTON_MOCK=true для mock-режима."
+        )
