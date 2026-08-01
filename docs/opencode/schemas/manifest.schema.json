@@ -131,10 +131,10 @@
       "type": "object",
       "description": "Результаты автоматических проверок.",
       "properties": {
-        "compileall": {"type": ["string", "null"]},
-        "pytest": {"type": ["string", "null"]},
-        "ruff": {"type": ["string", "null"]},
-        "mypy": {"type": ["string", "null"]}
+        "compileall": {"type": ["object", "string", "null"]},
+        "pytest": {"type": ["object", "string", "null"]},
+        "ruff": {"type": ["object", "string", "null"]},
+        "mypy": {"type": ["object", "string", "null"]}
       }
     },
     "changed_files": {
