@@ -65,6 +65,7 @@ class QueueController:
 
     def _process_batch(self, progress_callback):
         try:
+            self.progress_queue.put(("worker_started", 0, None))
             batch = self.batch_service.batch_run
             batch.status = "processing"
             batch.started_at = datetime.now().isoformat()
@@ -138,7 +139,6 @@ class QueueController:
             if self.batch_service.batch_run:
                 self.batch_service.batch_run.status = "failed"
                 self._save_runtime_error_log(str(e))
-            self.progress_queue.put(("batch_done", 100, None))
         finally:
             self.processing = False
             self.progress_queue.put(("batch_done", 100, None))
@@ -243,22 +243,11 @@ class SourceQueueFrame(ttk.Frame):
         self._start_progress_checker()
 
     def _build(self):
-        if self.config.is_demo_mode():
-            banner = ttk.LabelFrame(self, text=" РЕЖИМ ОТЛАДКИ ", padding=8)
-            banner.pack(fill=tk.X, padx=10, pady=(5, 0))
-            modes = []
-            if self.config.llm_mode == "mock":
-                modes.append("LLM")
-            if self.config.newton_mode == "mock":
-                modes.append("Транскрибация")
-            if self.config.confluence_mode == "mock":
-                modes.append("Confluence")
-            if self.config.telegram_mode == "mock":
-                modes.append("Telegram")
-            if self.config.bitlink_mode == "mock":
-                modes.append("BIT.Link")
-            banner_text = f"DEMO/MOCK: {', '.join(modes)} — данные имитируются, API не вызываются"
-            ttk.Label(banner, text=banner_text, foreground="#cc6600", font=("Segoe UI", 9, "bold")).pack()
+        banner_frame = ttk.LabelFrame(self, text=" РЕЖИМ РАБОТЫ ", padding=8)
+        banner_frame.pack(fill=tk.X, padx=10, pady=(5, 0))
+        self.banner_label = ttk.Label(banner_frame, text="", foreground="#cc6600", font=("Segoe UI", 9, "bold"))
+        self.banner_label.pack()
+        self._update_banner()
 
         top = ttk.Frame(self)
         top.pack(fill=tk.X, padx=10, pady=5)
@@ -543,110 +532,148 @@ class SourceQueueFrame(ttk.Frame):
 
         ttk.Button(dlg, text="Закрыть", command=dlg.destroy).pack(pady=10)
 
-    def _run_preflight(self) -> tuple[bool, list[str], bool]:
-        items = self.qc.get_items()
-        errors = []
-        warnings = []
-        processable = [i for i in items if i.status in ("pending",)]
+    def _log_event(self, stage: str, percent: int, item, severity: str, message: str):
+        try:
+            batch = self.qc.batch_service.batch_run
+            if not batch:
+                return
+            batch_debug_dir = Path(settings.DEBUG_DIR) / batch.batch_id[:8]
+            batch_debug_dir.mkdir(parents=True, exist_ok=True)
+            log_path = batch_debug_dir / "processing_events.jsonl"
+            import json as json_mod
+            entry = {
+                "timestamp": datetime.now().isoformat(),
+                "stage": stage,
+                "percent": percent,
+                "severity": severity,
+                "message": message,
+            }
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json_mod.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
-        if not processable:
-            errors.append("Нет элементов для обработки (все элементы уже завершены или пропущены)")
-            return False, errors, True
+    def _show_nothing_to_process(self, batch):
+        result_text = ""
+        for item in batch.items:
+            if item.status == "completed":
+                result_text += f"  ✓ {item.display_name} (завершён)\n"
+            elif item.status == "skipped":
+                result_text += f"  ⊘ {item.display_name} (пропущен)\n"
+            elif item.status == "validation_failed":
+                result_text += f"  ✗ {item.display_name} (валидация не пройдена)\n"
+            elif item.status == "failed":
+                result_text += f"  ✗ {item.display_name} (ошибка)\n"
+            else:
+                result_text += f"  ? {item.display_name} (статус: {item.status})\n"
+        if not result_text:
+            result_text = "  (нет элементов)\n"
 
-        for item in processable:
-            if item.source_type in ("local_video", "local_transcript"):
-                if not item.source_path:
-                    errors.append(f"{item.display_name}: не указан путь к файлу")
-                    continue
-                if not item.source_path.exists():
-                    errors.append(f"{item.display_name}: файл не найден: {item.source_path}")
-                    continue
-                try:
-                    sz = item.source_path.stat().st_size
-                    if sz == 0:
-                        errors.append(f"{item.display_name}: файл пуст (0 байт)")
-                except OSError as e:
-                    errors.append(f"{item.display_name}: ошибка доступа к файлу: {e}")
-                    continue
-
-            if item.source_type not in ("local_video", "local_transcript", "bitlink"):
-                errors.append(f"{item.display_name}: неизвестный тип источника: {item.source_type}")
-
-            if not item.protocol_template:
-                warnings.append(f"{item.display_name}: не указан шаблон протокола")
-
-        has_blocking = len(errors) > 0
-        return len(processable) > 0, errors if errors else warnings, has_blocking
-
-    def _show_preflight_dialog(self, errors: list[str], has_blocking: bool):
         root = self.winfo_toplevel()
         dlg = tk.Toplevel(root)
-        dlg.title("Предстартовая проверка")
-        dlg.geometry("550x400")
+        dlg.title("Нечего обрабатывать")
+        dlg.geometry("450x300")
         dlg.transient(root)
         dlg.grab_set()
 
-        if has_blocking:
-            ttk.Label(dlg, text="Обнаружены критические ошибки!", foreground="red",
-                      font=("Segoe UI", 11, "bold")).pack(padx=10, pady=(10, 5))
-        elif not errors:
-            ttk.Label(dlg, text="Проверка пройдена успешно", foreground="green",
-                      font=("Segoe UI", 11, "bold")).pack(padx=10, pady=(10, 5))
-        else:
-            ttk.Label(dlg, text="Предупреждения (запуск возможен)", foreground="#cc6600",
-                      font=("Segoe UI", 11, "bold")).pack(padx=10, pady=(10, 5))
+        ttk.Label(dlg, text="Все элементы уже обработаны",
+                  font=("Segoe UI", 11, "bold")).pack(padx=10, pady=(10, 5))
 
         text_frame = ttk.Frame(dlg)
         text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        text_widget = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 9))
+        text_widget.pack(fill=tk.BOTH, expand=True)
+        text_widget.insert("1.0", result_text)
+        text_widget.configure(state=tk.DISABLED)
 
-        scrollbar = ttk.Scrollbar(text_frame)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        ttk.Button(dlg, text="Закрыть", command=dlg.destroy).pack(pady=10)
 
-        result_text = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 9),
-                              yscrollcommand=scrollbar.set)
+    def _start_processing(self):
+        if self.qc.processing:
+            return
+        from services.preflight_service import run_preflight
+        from services.runtime_config import get_runtime_config
+
+        batch = self.qc.batch_service.batch_run
+        if not batch or not batch.items:
+            messagebox.showwarning("Предупреждение", "Очередь пуста")
+            return
+
+        # Reset state
+        batch.cancel_requested = False
+        batch.stop_after_current = False
+
+        config = get_runtime_config()
+        items = [i for i in batch.items if i.status not in ("completed", "skipped")]
+
+        if not items:
+            self._show_nothing_to_process(batch)
+            return
+
+        preflight = run_preflight(items, config)
+
+        if preflight["has_blocking"]:
+            self._show_preflight_blocking(preflight)
+            return
+
+        if preflight["has_warnings"]:
+            self._show_preflight_warnings(preflight)
+            return
+
+        # No blocking, no warnings — start immediately
+        self._log_event("preflight_passed", 0, None, "info", f"Preflight passed, {preflight['items_checked']} items checked")
+        self._do_start_processing()
+
+    def _show_preflight_warnings(self, preflight):
+        root = self.winfo_toplevel()
+        dlg = tk.Toplevel(root)
+        dlg.title("Предстартовая проверка — предупреждения")
+        dlg.geometry("500x350")
+        dlg.transient(root)
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="Обнаружены предупреждения", foreground="#cc6600",
+                  font=("Segoe UI", 11, "bold")).pack(padx=10, pady=(10, 5))
+
+        text_frame = ttk.Frame(dlg)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        result_text = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 9), height=10)
         result_text.pack(fill=tk.BOTH, expand=True)
-        scrollbar.configure(command=result_text.yview)
-
-        if errors:
-            for line in errors:
-                result_text.insert(tk.END, f"  {line}\n")
-        else:
-            result_text.insert(tk.END, "  Ошибок не обнаружено.\n")
+        for line in preflight["warnings"]:
+            result_text.insert(tk.END, f"  ! {line}\n")
         result_text.configure(state=tk.DISABLED)
 
         btn_frame = ttk.Frame(dlg)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
 
-        if has_blocking:
-            ttk.Button(btn_frame, text="Закрыть", command=dlg.destroy).pack(side=tk.RIGHT, padx=3)
-        else:
-            ttk.Button(btn_frame, text="Отмена", command=dlg.destroy).pack(side=tk.RIGHT, padx=3)
-            def _start_after_preflight():
-                dlg.destroy()
-                self._do_start_processing()
-            ttk.Button(btn_frame, text="Запустить обработку",
-                       command=_start_after_preflight).pack(side=tk.RIGHT, padx=3)
+        def cont():
+            dlg.destroy()
+            self._log_event("preflight_warnings_accepted", 0, None, "warning", f"{len(preflight['warnings'])} warnings accepted")
+            self._do_start_processing()
 
-    def _start_processing(self):
-        if self.qc.processing:
-            return
-        if not self.qc.get_items():
-            messagebox.showwarning("Предупреждение", "Очередь пуста")
-            return
+        ttk.Button(btn_frame, text="Продолжить обработку", command=cont).pack(side=tk.RIGHT, padx=3)
+        ttk.Button(btn_frame, text="Отмена", command=dlg.destroy).pack(side=tk.RIGHT, padx=3)
 
-        has_processable, errors, has_blocking = self._run_preflight()
+    def _show_preflight_blocking(self, preflight):
+        root = self.winfo_toplevel()
+        dlg = tk.Toplevel(root)
+        dlg.title("Предстартовая проверка — ошибки")
+        dlg.geometry("550x400")
+        dlg.transient(root)
+        dlg.grab_set()
 
-        if not has_processable:
-            messagebox.showinfo("Информация", "Нет элементов для обработки. Все элементы уже завершены или пропущены.")
-            return
+        ttk.Label(dlg, text="Обнаружены критические ошибки!", foreground="red",
+                  font=("Segoe UI", 11, "bold")).pack(padx=10, pady=(10, 5))
 
-        if errors:
-            self._show_preflight_dialog(errors, has_blocking)
-            if has_blocking:
-                return
-        else:
-            self._show_preflight_dialog(errors, has_blocking)
-            return
+        text_frame = ttk.Frame(dlg)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        result_text = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 9))
+        result_text.pack(fill=tk.BOTH, expand=True)
+        for line in preflight["errors"]:
+            result_text.insert(tk.END, f"  X {line}\n")
+        result_text.configure(state=tk.DISABLED)
+
+        ttk.Button(dlg, text="Закрыть", command=dlg.destroy).pack(pady=10)
 
     def _do_start_processing(self):
         if self.qc.processing:
@@ -654,12 +681,51 @@ class SourceQueueFrame(ttk.Frame):
 
         self.start_btn.configure(state=tk.DISABLED)
         self.stop_btn.configure(state=tk.NORMAL)
+        self.progress_label["text"] = "Запуск обработки..."
+        self.stage_label["text"] = ""
         self._elapsed_start = datetime.now()
         self.overall_progress["value"] = 0
         self.current_progress["value"] = 0
         self._current_stage.clear()
         self._last_progress.clear()
         self.qc.start_processing(progress_callback=None)
+        self.after(500, self._check_first_progress)
+
+    def _check_first_progress(self):
+        if not self.qc.processing:
+            return
+        if self._current_stage or self._last_progress:
+            return
+        self.stage_label["text"] = "Ожидание первого этапа..."
+        self.after(500, self._check_first_progress)
+
+    def _update_banner(self):
+        from services.runtime_config import get_runtime_config
+        config = get_runtime_config()
+        if not config.is_demo_mode():
+            self.banner_label.configure(text="")
+            return
+
+        parts = ["DEMO / MOCK"]
+        if config.llm_mode == "mock":
+            parts.append("LLM: mock")
+        if config.bitlink_mode == "mock":
+            parts.append("BIT.Link: mock")
+
+        # Only show service info relevant to the queue's items
+        has_video = any(i.source_type == "local_video" for i in (self.qc.batch_service.batch_run.items if self.qc.batch_service.batch_run else []))
+        has_transcript = any(i.source_type == "local_transcript" for i in (self.qc.batch_service.batch_run.items if self.qc.batch_service.batch_run else []))
+        has_bitlink = any(i.source_type == "bitlink" for i in (self.qc.batch_service.batch_run.items if self.qc.batch_service.batch_run else []))
+
+        if has_video:
+            parts.append(f"Newton: {config.newton_mode}")
+        if has_transcript:
+            parts.append("Newton: не требуется")
+        if has_bitlink:
+            parts.append(f"BIT.Link: {config.bitlink_mode}")
+
+        parts.append(f"Confluence: {config.confluence_mode}")
+        self.banner_label.configure(text=" | ".join(parts))
 
     def _stop_processing(self):
         if self.qc.batch_service.batch_run:
