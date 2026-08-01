@@ -7,7 +7,7 @@
   "active_task_id": "TASK-2026-08-01-e7cc95f",
   "active_task_file": "docs/opencode/tasks/TASK-2026-08-01-e7cc95f.md",
   "base_commit": "2644b52dee92f7f6d2709496335f90364c47057f",
-  "head_commit": "e994358184148fa43841941f9e8f8e3e24fd16ad",
+  "head_commit": "58453171148386ba0ed3631c04b6d864a2d4f7c2",
   "working_branch": "fix/audit-e7cc95f",
   "pull_request_url": null,
   "status": "in_progress",
@@ -35,11 +35,17 @@
     },
     {
       "id": "BB-CRIT-002",
-      "status": "OPEN",
-      "fix_commit": null,
-      "changed_files": [],
-      "tests": [],
-      "executor_comment": ""
+      "status": "FIXED",
+      "fix_commit": "58453171148386ba0ed3631c04b6d864a2d4f7c2",
+      "changed_files": [
+        "services/llm_service.py",
+        "services/processing_service.py",
+        "settings.py",
+        ".env.example",
+        "protocol_templates/base.py"
+      ],
+      "tests": ["tests/test_services.py"],
+      "executor_comment": "Создан LLMClient с OpenAI-совместимым API. Конфигурируется через LLM_MOCK/LLM_API_URL/LLM_API_KEY/LLM_MODEL. ProcessingService вызывает LLM для генерации протокола из system_prompt шаблона + транскрипта. Mock возвращает учебный шаблон."
     },
     {
       "id": "BB-CRIT-003",
@@ -194,7 +200,6 @@
   },
   "changed_files": [],
   "remaining_blockers": [
-    "BB-CRIT-002: no LLM layer",
     "BB-CRIT-003: all facts merged into one topic",
     "BB-CRIT-004: three templates produce empty content",
     "BB-CRIT-005: validation failure marks item as completed",
@@ -204,6 +209,6 @@
     "BB-CRIT-009: queue recovery not implemented",
     "BB-CRIT-010: republish is a stub"
   ],
-  "next_action": "fix BB-CRIT-002: implement LLM layer with configurable provider",
+  "next_action": "fix BB-CRIT-003+004: implement topic clustering in project_detailed and content for all 4 templates",
   "updated_at": "2026-08-01T19:20:00Z"
 }
