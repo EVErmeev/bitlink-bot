@@ -1,8 +1,9 @@
 import json
-import hashlib
 from pathlib import Path
-import settings
+
 import requests
+
+import settings
 
 
 class LLMConfigurationError(Exception):
@@ -58,7 +59,7 @@ class LLMClient:
             raise RuntimeError(f"LLM API error: {e}") from e
 
     def generate_json(self, system_prompt, user_prompt, json_schema, *,
-                      temperature=0.1, max_retries=3) -> dict:
+                      temperature=0.1, max_retries=3) -> tuple[dict, str]:
         for attempt in range(max_retries):
             response = self.generate(
                 system_prompt,
@@ -77,13 +78,14 @@ class LLMClient:
                     raise RuntimeError(
                         f"LLM output failed schema validation after {max_retries} retries: {ve}"
                     ) from ve
-                return parsed
+                return parsed, response
             except json.JSONDecodeError:
                 if attempt < max_retries - 1:
                     continue
                 raise RuntimeError(
                     f"LLM output is not valid JSON after {max_retries} retries"
-                )
+                ) from None
+        return {}, ""
 
     def _save_llm_artifacts(self, debug_dir, system_prompt, user_prompt,
                             response_raw, parsed, schema):

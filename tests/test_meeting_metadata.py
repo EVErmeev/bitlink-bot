@@ -1,10 +1,14 @@
-import pytest
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from meeting_metadata import extract_date_from_filename, determine_meeting_date, compute_sha256, count_words
+from meeting_metadata import (
+    compute_sha256,
+    count_words,
+    determine_meeting_date,
+    extract_date_from_filename,
+)
 
 
 class TestDateExtraction:

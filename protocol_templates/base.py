@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
-from models.protocol import Protocol, TopicBlock, DecisionItem, QuestionItem, RiskItem, TaskItem
+
+from models.protocol import (
+    Protocol,
+)
 from models.validation import ValidationReport
 
 
@@ -21,9 +24,24 @@ class BaseProtocolTemplate(ABC):
     def assemble(self, protocol: Protocol, atomic_items: list, meeting_metadata: dict) -> Protocol:
         pass
 
+    def assemble_from_llm_json(self, protocol: Protocol, atomic_items: list,
+                                llm_data: dict, meeting_metadata: dict) -> Protocol:
+        """Parse schema-valid LLM JSON dict into protocol fields. Override per template."""
+        protocol.meeting_purpose = llm_data.get("meeting_purpose", protocol.meeting_purpose or "")
+        protocol.key_outcomes = llm_data.get("key_outcomes", "")
+        protocol.meeting_context = llm_data.get("meeting_context", "")
+        if llm_data.get("participants"):
+            protocol.participants = llm_data["participants"]
+        return protocol
+
     def assemble_with_llm_output(self, protocol: Protocol, atomic_items: list,
                                   llm_output: str, meeting_metadata: dict) -> Protocol:
-        return self.assemble(protocol, atomic_items, meeting_metadata)
+        try:
+            import json
+            llm_data = json.loads(llm_output)
+            return self.assemble_from_llm_json(protocol, atomic_items, llm_data, meeting_metadata)
+        except (json.JSONDecodeError, TypeError):
+            return self.assemble(protocol, atomic_items, meeting_metadata)
 
     @abstractmethod
     def validate(self, protocol: Protocol) -> ValidationReport:

@@ -1,12 +1,11 @@
 from dataclasses import dataclass, field
 from datetime import date, time
-from typing import Optional
 
 
 @dataclass
 class MeetingMetadata:
-    meeting_date: Optional[date] = None
-    meeting_time: Optional[time] = None
+    meeting_date: date | None = None
+    meeting_time: time | None = None
     title: str = ""
     participants: list[dict] = field(default_factory=list)
     source_type: str = ""

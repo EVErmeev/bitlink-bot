@@ -1,51 +1,63 @@
 import json
 import uuid
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
 
-from models.protocol import Protocol
 from models.batch import BatchItem
+from models.protocol import Protocol
 
 try:
     import settings
     from meeting_metadata import determine_meeting_date
     from protocol_templates.registry import TemplateRegistry
-    from services.source_isolation import (
-        generate_source_context_id,
-        validate_source_alignment,
-        create_provenance,
-        create_input_manifest,
-    )
-    from services.fact_extraction import extract_atomic_items
-    from services.fact_validation import validate_facts, apply_corrections
-    from services.topic_coverage import audit_topic_coverage, validate_topic_source_alignment
     from services.bitlink_service import BitlinkClient
-    from services.transcription_service import TranscriptionClient
     from services.confluence_service import ConfluenceClient
-    from services.telegram_service import TelegramClient
+    from services.fact_extraction import extract_atomic_items
+    from services.fact_validation import apply_corrections, validate_facts
     from services.llm_service import LLMClient
     from services.runtime_estimator import RuntimeEstimator
+    from services.source_isolation import (
+        create_input_manifest,
+        create_provenance,
+        generate_source_context_id,
+        validate_source_alignment,
+    )
+    from services.telegram_service import TelegramClient
+    from services.topic_coverage import (
+        audit_topic_coverage,
+        save_coverage_report,
+        validate_topic_source_alignment,
+    )
+    from services.transcription_service import TranscriptionClient
 except ImportError:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from bitlink_service import BitlinkClient  # type: ignore[no-redef]
+    from confluence_service import ConfluenceClient  # type: ignore[no-redef]
+    from fact_extraction import extract_atomic_items  # type: ignore[no-redef]
+    from fact_validation import (  # type: ignore[no-redef]
+        apply_corrections,
+        validate_facts,
+    )
+    from llm_service import LLMClient  # type: ignore[no-redef]
+    from runtime_estimator import RuntimeEstimator  # type: ignore[no-redef]
+    from source_isolation import (  # type: ignore[no-redef]
+        create_input_manifest,
+        create_provenance,
+        generate_source_context_id,
+        validate_source_alignment,
+    )
+    from telegram_service import TelegramClient  # type: ignore[no-redef]
+    from topic_coverage import (  # type: ignore[no-redef]
+        audit_topic_coverage,
+        save_coverage_report,
+        validate_topic_source_alignment,
+    )
+    from transcription_service import TranscriptionClient  # type: ignore[no-redef]
+
     import settings
     from meeting_metadata import determine_meeting_date
     from protocol_templates.registry import TemplateRegistry
-    from source_isolation import (
-        generate_source_context_id,
-        validate_source_alignment,
-        create_provenance,
-        create_input_manifest,
-    )
-    from fact_extraction import extract_atomic_items
-    from fact_validation import validate_facts, apply_corrections
-    from topic_coverage import audit_topic_coverage, validate_topic_source_alignment
-    from bitlink_service import BitlinkClient
-    from transcription_service import TranscriptionClient
-    from confluence_service import ConfluenceClient
-    from telegram_service import TelegramClient
-    from llm_service import LLMClient
-    from runtime_estimator import RuntimeEstimator
 
 
 class ProcessingService:
@@ -120,9 +132,13 @@ class ProcessingService:
                 + f"Название: {item.display_name}\n"
             )
 
-            llm_output = self.llm.generate(
+            json_schema = template.get_schema()
+            llm_data, llm_raw = self.llm.generate_json(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                json_schema=json_schema,
+                temperature=0.1,
+                max_retries=3,
             )
 
             protocol = Protocol(
@@ -138,13 +154,20 @@ class ProcessingService:
             protocol.meeting_purpose = "Обсуждение статуса и планов проекта"
 
             protocol.atomic_items = atomic_items
-            protocol = template.assemble_with_llm_output(
-                protocol, atomic_items, llm_output,
+            protocol = template.assemble_from_llm_json(
+                protocol, atomic_items, llm_data,
                 {"date": meeting_date, "time": meeting_time, "item": item},
             )
 
+            if item.debug_directory:
+                self.llm._save_llm_artifacts(
+                    item.debug_directory,
+                    system_prompt, user_prompt,
+                    llm_raw, llm_data, json_schema,
+                )
+
             self._report_progress("fact_validation", 70, item)
-            fact_report = validate_facts(protocol, transcript_text)
+            _ = validate_facts(protocol, transcript_text)
             protocol = apply_corrections(protocol)
 
             self._report_progress("fact_validation", 72, item)
@@ -160,6 +183,9 @@ class ProcessingService:
             topic_alignment = validate_topic_source_alignment(protocol)
             protocol.topic_coverage_passed = topic_coverage["coverage_passed"]
             protocol.topic_alignment_passed = topic_alignment["alignment_passed"]
+
+            if item.debug_directory:
+                save_coverage_report(topic_coverage, item.debug_directory / "topic_coverage_report.json")
 
             self._report_progress("rendering", 85, item)
             html = template.render_html(protocol)
@@ -177,15 +203,17 @@ class ProcessingService:
             )
 
             if item.debug_directory:
-                self._save_artifacts(item.debug_directory, protocol, html, transcript_text)
+                self._save_artifacts(item.debug_directory, protocol, html, transcript_text, item)
 
             if publishable:
                 if item.debug_directory:
                     from meeting_metadata import compute_sha256_from_bytes
                     validated_dir = item.debug_directory / "validated"
                     validated_dir.mkdir(parents=True, exist_ok=True)
-                    with open(validated_dir / "protocol_final_validated.json", "w", encoding="utf-8") as f:
-                        json.dump(protocol.to_dict(), f, indent=2, ensure_ascii=False)
+                    import json as json_mod
+                    json_bytes = json_mod.dumps(protocol.to_dict(), ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+                    with open(validated_dir / "protocol_final_validated.json", "wb") as f:
+                        f.write(json_bytes)
                     with open(validated_dir / "protocol_final_validated.html", "w", encoding="utf-8") as f:
                         f.write(html)
                     manifest = {
@@ -193,9 +221,7 @@ class ProcessingService:
                         "source_context_id": protocol.source_context_id,
                         "template_id": protocol.template_id,
                         "html_sha256": compute_sha256_from_bytes(html.encode("utf-8")),
-                        "json_sha256": compute_sha256_from_bytes(
-                            json.dumps(protocol.to_dict(), sort_keys=True).encode("utf-8")
-                        ),
+                        "json_sha256": compute_sha256_from_bytes(json_bytes),
                         "validation_flags": {
                             "source_alignment_passed": protocol.source_alignment_passed,
                             "fact_validation_passed": protocol.fact_validation_passed,
@@ -221,7 +247,7 @@ class ProcessingService:
                         parent_page_id=parent_id,
                     )
                     result["url"] = page.get("url", "")
-                    item.result_url = result["url"]
+                    item.result_url = str(result["url"])
 
                     if item.send_telegram:
                         self._report_progress("sending_telegram", 95, item)
@@ -257,6 +283,8 @@ class ProcessingService:
                 item.status = "completed"
                 item.status_message = "Dry-run: протокол сгенерирован, публикация пропущена"
                 result["success"] = True
+                result["url"] = None
+                result["error"] = None
             elif not publishable:
                 item.status = "validation_failed"
                 item.status_message = "Валидация не пройдена"
@@ -294,6 +322,7 @@ class ProcessingService:
             return {"success": False, "error": "Missing validated artifacts (JSON/HTML)"}
 
         import json as json_mod
+
         from meeting_metadata import compute_sha256_from_bytes
 
         manifest = json_mod.loads(manifest_path.read_text(encoding="utf-8"))
@@ -303,10 +332,10 @@ class ProcessingService:
             return {"success": False, "error": "Protocol generation was not successful — republish rejected"}
 
         html_content = html_path.read_text(encoding="utf-8")
-        json_content = json_path.read_text(encoding="utf-8")
+        json_content_bytes = json_path.read_bytes()
 
         html_sha = compute_sha256_from_bytes(html_content.encode("utf-8"))
-        json_sha = compute_sha256_from_bytes(json_content.encode("utf-8"))
+        json_sha = compute_sha256_from_bytes(json_content_bytes)
 
         if html_sha != manifest.get("html_sha256"):
             return {"success": False, "error": "HTML was modified after validation — republish rejected"}
@@ -322,7 +351,7 @@ class ProcessingService:
         if item.dry_run:
             return {"success": True, "url": None, "message": "Dry-run: publishing skipped"}
 
-        proto_data = json_mod.loads(json_content)
+        proto_data = json_mod.loads(json_content_bytes.decode("utf-8"))
         parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
         title = proto_data.get("protocol_title", item.display_name or "Protocol")
         page = self.confluence.create_page(
@@ -348,10 +377,10 @@ class ProcessingService:
         if item.source_type == "local_transcript":
             if item.source_path and item.source_path.exists():
                 try:
-                    with open(item.source_path, "r", encoding="utf-8-sig") as f:
+                    with open(item.source_path, encoding="utf-8-sig") as f:
                         return f.read()
                 except UnicodeDecodeError:
-                    with open(item.source_path, "r", encoding="utf-8") as f:
+                    with open(item.source_path, encoding="utf-8") as f:
                         return f.read()
 
         if item.source_type == "local_video":
@@ -373,7 +402,7 @@ class ProcessingService:
         return ""
 
     def _save_artifacts(self, directory: Path, protocol: Protocol, html: str,
-                        transcript: str):
+                        transcript: str, item: BatchItem):
         directory.mkdir(parents=True, exist_ok=True)
 
         with open(directory / "protocol.json", "w", encoding="utf-8") as f:
@@ -390,9 +419,19 @@ class ProcessingService:
             json.dump(prov, f, indent=2, ensure_ascii=False)
 
         manifest = create_input_manifest(
-            directory, protocol.source_context_id, "",
-            "local_transcript", protocol.protocol_id,
+            source_path=str(item.source_path) if item.source_path else None,
+            source_context_id=protocol.source_context_id,
+            source_sha256=item.source_sha256 or "",
+            source_type=item.source_type,
+            item_id=item.item_id,
         )
+        manifest["protocol_id"] = protocol.protocol_id
+        manifest["template_id"] = protocol.template_id
+        manifest["protocol_mode"] = item.protocol_mode
+        manifest["word_count"] = item.word_count
+        manifest["file_size_bytes"] = item.file_size_bytes
+        manifest["duration_seconds"] = item.duration_seconds
+        manifest["external_source_id"] = item.bitlink_recording_id
         with open(directory / "input_manifest.json", "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
 

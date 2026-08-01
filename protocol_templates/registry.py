@@ -1,8 +1,10 @@
 from protocol_templates.base import BaseProtocolTemplate
+from protocol_templates.business_process_discovery import (
+    BusinessProcessDiscoveryTemplate,
+)
 from protocol_templates.management_summary import ManagementSummaryTemplate
-from protocol_templates.project_standard import ProjectStandardTemplate
 from protocol_templates.project_detailed import ProjectDetailedTemplate
-from protocol_templates.business_process_discovery import BusinessProcessDiscoveryTemplate
+from protocol_templates.project_standard import ProjectStandardTemplate
 
 
 class TemplateRegistry:

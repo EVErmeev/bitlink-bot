@@ -1,4 +1,5 @@
 import uuid
+
 import settings
 
 
@@ -40,7 +41,7 @@ class ConfluenceClient:
             "Используйте CONFLUENCE_MOCK=true для mock-режима."
         )
 
-    def find_page_by_title(self, title: str, space_key: str = None) -> list[dict]:
+    def find_page_by_title(self, title: str, space_key: str | None = None) -> list[dict]:
         if self.mock_mode:
             return [
                 {"id": "page_1", "title": "Протоколы встреч 2026", "space": space_key or self.space_key or "MOCK"},
@@ -50,8 +51,8 @@ class ConfluenceClient:
             "Поиск страниц через реальный API Confluence не реализован."
         )
 
-    def create_page(self, title: str, storage_html: str, parent_page_id: str = None,
-                    space_key: str = None) -> dict:
+    def create_page(self, title: str, storage_html: str, parent_page_id: str | None = None,
+                    space_key: str | None = None) -> dict:
         space = space_key or self.space_key or "MOCK"
         if self.mock_mode:
             page_id = str(uuid.uuid4())[:8]

@@ -1,5 +1,6 @@
-import settings
 import requests
+
+import settings
 
 
 class TelegramConfigurationError(Exception):

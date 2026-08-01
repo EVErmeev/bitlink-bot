@@ -1,17 +1,19 @@
 import re
-from datetime import date, datetime
+from datetime import date
 
 from models.protocol import Protocol, TopicBlock
-from models.validation import ValidationReport, ValidationStatus, ValidationIssue
+from models.validation import ValidationReport, ValidationStatus
 
 try:
+    from services.fact_validation import check_empty_cells, validate_facts
+    from services.render_validation import validate_html_render  # noqa: F401
     from services.source_isolation import validate_source_alignment
-    from services.fact_validation import validate_facts, check_empty_cells
-    from services.render_validation import validate_html_render
 except ImportError:
-    from source_isolation import validate_source_alignment
-    from fact_validation import validate_facts, check_empty_cells
-    from render_validation import validate_html_render
+    from fact_validation import (  # type: ignore[no-redef]
+        check_empty_cells,
+        validate_facts,
+    )
+    from source_isolation import validate_source_alignment  # type: ignore[no-redef]
 
 
 SECTION_WORD_COUNTS = {

@@ -1,18 +1,17 @@
-import pytest
 import sys
 from pathlib import Path
-from datetime import date
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.batch import BatchItem
-from models.protocol import Protocol, TopicBlock, DecisionItem, QuestionItem, RiskItem, TaskItem
-from services.processing_service import ProcessingService
 from services.bitlink_service import BitlinkClient
-from services.transcription_service import TranscriptionClient
 from services.confluence_service import ConfluenceClient
-from services.telegram_service import TelegramClient
 from services.fact_extraction import extract_atomic_items
+from services.processing_service import ProcessingService
+from services.telegram_service import TelegramClient
+from services.transcription_service import TranscriptionClient
 
 
 class TestBitlinkService:

@@ -1,13 +1,17 @@
-import pytest
 import sys
-from pathlib import Path
 from datetime import date
+from pathlib import Path
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from models.protocol import Protocol, TopicBlock, AtomicItem
+from models.protocol import AtomicItem, Protocol, TopicBlock
 from services.topic_coverage import (
-    build_topic_registry, map_atomic_items_to_topics,
-    audit_topic_coverage, validate_topic_source_alignment,
+    audit_topic_coverage,
+    build_topic_registry,
+    map_atomic_items_to_topics,
+    validate_topic_source_alignment,
 )
 
 
@@ -19,17 +23,17 @@ class TestTopicCoverage:
         p.meeting_date = date(2026, 7, 24)
         p.topic_blocks = [
             TopicBlock(topic_id="t1", title="Integration", source_context_id=ctx,
-                       discussion_content="Discussing REST API integration with external service", order=1),
+                       discussion_content="REST API integration with external service architecture", order=1),
             TopicBlock(topic_id="t2", title="Budget", source_context_id=ctx,
-                       discussion_content="Budget planning for next phase", order=2),
+                       discussion_content="Budget planning phase resources", order=2),
         ]
+        p.topic_blocks[0].source_item_ids = ["a1"]
+        p.topic_blocks[1].source_item_ids = ["a2"]
         p.atomic_items = [
             AtomicItem(item_id="a1", source_context_id=ctx, item_type="факт",
                        text="REST API integration architecture discussed", importance=0.9),
             AtomicItem(item_id="a2", source_context_id=ctx, item_type="факт",
-                       text="Budget requires clarification", importance=0.4),
-            AtomicItem(item_id="a3", source_context_id=ctx, item_type="риск",
-                       text="Dependency on external API is a risk", importance=0.85),
+                       text="Budget planning for next phase", importance=0.4),
         ]
         return p
 

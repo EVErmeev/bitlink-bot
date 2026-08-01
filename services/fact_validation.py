@@ -1,5 +1,6 @@
-from datetime import date, datetime
-from models.protocol import Protocol, AtomicItem, DecisionItem, TaskItem, TopicBlock
+from datetime import date
+
+from models.protocol import Protocol
 from models.validation import ValidationReport, ValidationStatus
 
 
@@ -144,7 +145,7 @@ def _check_invented_items(protocol: Protocol, transcript_lower: str) -> list[dic
 
 
 def _check_speakers_exist(protocol: Protocol, transcript_text: str) -> list[dict]:
-    issues = []
+    issues: list[dict] = []
     speaker_names = [p.get("name", "") for p in protocol.participants if isinstance(p, dict)]
     transcript_speakers = set()
     import re

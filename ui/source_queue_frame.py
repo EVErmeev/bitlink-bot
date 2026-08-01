@@ -1,16 +1,15 @@
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import threading
 import queue
-from pathlib import Path
+import threading
+import tkinter as tk
 from datetime import datetime
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 
+import settings
 from models.batch import BatchItem, BatchRun
 from services.batch_service import BatchService
 from services.processing_service import ProcessingService
 from services.runtime_estimator import RuntimeEstimator
-import settings
-
 
 _queue_controller = None
 

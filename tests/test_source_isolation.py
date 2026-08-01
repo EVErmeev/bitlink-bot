@@ -1,18 +1,21 @@
-import pytest
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.protocol import (
-    Protocol, TopicBlock, DecisionItem, QuestionItem, RiskItem, TaskItem, AtomicItem
+    DecisionItem,
+    Protocol,
+    QuestionItem,
+    RiskItem,
+    TaskItem,
+    TopicBlock,
 )
-from models.validation import ValidationReport, ValidationStatus
 from services.source_isolation import (
-    generate_source_context_id,
-    validate_source_alignment,
     create_input_manifest,
     create_provenance,
+    generate_source_context_id,
+    validate_source_alignment,
 )
 
 

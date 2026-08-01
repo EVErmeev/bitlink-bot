@@ -31,16 +31,17 @@ jobs:
       - name: Python compileall
         run: python -m compileall .
 
-      - name: JSON manifest validation
+      - name: Validate JSON with json.tool
         run: python -m json.tool docs/opencode/manifest.json
+
+      - name: Validate manifest schema
+        run: python -c "import json, jsonschema; m=json.load(open('docs/opencode/manifest.json', encoding='utf-8')); s=json.load(open('docs/opencode/schemas/manifest.schema.json', encoding='utf-8')); jsonschema.validate(m,s); print('OK')"
 
       - name: Run tests
         run: pytest -q
 
       - name: Ruff check
         run: ruff check .
-        continue-on-error: true
 
       - name: Mypy check
         run: mypy . --ignore-missing-imports
-        continue-on-error: true

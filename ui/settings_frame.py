@@ -1,16 +1,16 @@
-import tkinter as tk
-from tkinter import ttk, messagebox
-import os
-from pathlib import Path
-from dotenv import load_dotenv, set_key
 import importlib
+import os
+import tkinter as tk
+from pathlib import Path
+from tkinter import messagebox, ttk
 
-from protocol_templates.registry import TemplateRegistry
+from dotenv import load_dotenv, set_key
+
+import settings
 from services.bitlink_service import BitlinkClient
-from services.transcription_service import TranscriptionClient
 from services.confluence_service import ConfluenceClient
 from services.telegram_service import TelegramClient
-import settings
+from services.transcription_service import TranscriptionClient
 
 
 class SettingsFrame(ttk.Frame):

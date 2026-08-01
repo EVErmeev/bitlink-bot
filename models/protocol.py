@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import date, time, datetime
-from typing import Optional
+from datetime import date, time
 
 
 @dataclass
@@ -33,6 +32,8 @@ class TopicBlock:
     status_deadline: str = ""
     order: int = 0
     word_count: int = 0
+    source_item_ids: list = field(default_factory=list)
+    evidence: list = field(default_factory=list)
 
 
 @dataclass
@@ -109,8 +110,8 @@ class Protocol:
     source_context_id: str
 
     # Section 1: General info
-    meeting_date: Optional[date] = None
-    meeting_time: Optional[time] = None
+    meeting_date: date | None = None
+    meeting_time: time | None = None
     protocol_title: str = ""
     meeting_purpose: str = ""
 
@@ -196,6 +197,8 @@ class Protocol:
                     "status_deadline": tb.status_deadline,
                     "order": tb.order,
                     "word_count": tb.word_count,
+                    "source_item_ids": tb.source_item_ids,
+                    "evidence": tb.evidence,
                 }
                 for tb in self.topic_blocks
             ],
@@ -346,6 +349,8 @@ class Protocol:
                 status_deadline=tb.get("status_deadline", ""),
                 order=tb.get("order", 0),
                 word_count=tb.get("word_count", 0),
+                source_item_ids=tb.get("source_item_ids", []),
+                evidence=tb.get("evidence", []),
             ))
         for dec in d.get("decisions", []):
             p.decisions.append(DecisionItem(

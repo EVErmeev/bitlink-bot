@@ -5,10 +5,9 @@ from pathlib import Path
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import settings
 from models.batch import BatchItem
 from services.processing_service import ProcessingService
-from services.runtime_estimator import RuntimeEstimator
-import settings
 
 
 def main():
@@ -89,7 +88,7 @@ def process_file(filepath: str, source_type: str, args):
     result = service.process_item(item)
 
     if result["success"]:
-        print(f"\nГотово! Протокол создан.")
+        print("\nГотово! Протокол создан.")
         if result.get("url"):
             print(f"URL: {result['url']}")
     else:
@@ -118,10 +117,9 @@ def run_setup():
     tg_token = input("\nTelegram Bot Token (опционально): ").strip()
     tg_chat = input("Telegram Chat ID (опционально): ").strip()
 
-    lines = []
     if env_path.exists():
-        with open(env_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+        with open(env_path, encoding="utf-8") as f:
+            _ = f.readlines()
 
     env_vars = {
         "BITLINK_BASE_URL": bitlink_base,
@@ -150,7 +148,6 @@ def run_watch():
     print("Нажмите Ctrl+C для выхода")
     # Simple watch implementation
     import time
-    import os
     watch_dir = Path.cwd()
     known_files = set()
 

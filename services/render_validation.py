@@ -1,7 +1,7 @@
 import re
+
 from models.protocol import Protocol
 from models.validation import ValidationReport, ValidationStatus
-
 
 REMOVED_SECTIONS_V3 = [
     "Сквозная схема процесса",

@@ -1,6 +1,8 @@
-import pytest
 import sys
 from pathlib import Path
+
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from services.llm_service import LLMClient
@@ -16,7 +18,7 @@ class TestLLMGenerateJSON:
         def mock_gen(sp, up, temperature=0.1, max_tokens=4096):
             return '{"title": "Test Meeting"}'
         monkeypatch.setattr(client, 'generate', mock_gen)
-        result = client.generate_json(
+        result, raw = client.generate_json(
             "Generate a JSON with a title field",
             "Return: {\"title\": \"Test Meeting\"}",
             json_schema=schema,
@@ -33,7 +35,7 @@ class TestLLMGenerateJSON:
                 return "not valid json {{{"
             return '{"x": 42}'
         monkeypatch.setattr(client, 'generate', mock_gen)
-        result = client.generate_json("sys", "user", schema)
+        result, raw = client.generate_json("sys", "user", schema)
         assert result == {"x": 42}
         assert call_count[0] == 3
 
@@ -46,7 +48,7 @@ class TestLLMGenerateJSON:
                 return '{"wrong_field": 123}'
             return '{"name": "Correct"}'
         monkeypatch.setattr(client, 'generate', mock_gen)
-        result = client.generate_json("sys", "user", schema)
+        result, raw = client.generate_json("sys", "user", schema)
         assert result == {"name": "Correct"}
         assert call_count[0] == 2
 
@@ -66,6 +68,6 @@ class TestLLMGenerateJSON:
         def mock_gen(sp, up, temperature=0.1, max_tokens=4096):
             return '{"protocol_title": "My Protocol", "key_outcomes": "All tasks completed"}'
         monkeypatch.setattr(client, 'generate', mock_gen)
-        result = client.generate_json("sys", "Generate protocol", schema)
+        result, raw = client.generate_json("sys", "Generate protocol", schema)
         assert result["protocol_title"] == "My Protocol"
         assert result["key_outcomes"] == "All tasks completed"

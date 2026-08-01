@@ -1,9 +1,16 @@
 import re
 from datetime import date
 
-from protocol_templates.base import BaseProtocolTemplate
-from models.protocol import Protocol, TopicBlock, DecisionItem, QuestionItem, RiskItem, TaskItem, AtomicItem
+from models.protocol import (
+    AtomicItem,
+    DecisionItem,
+    Protocol,
+    QuestionItem,
+    RiskItem,
+    TaskItem,
+)
 from models.validation import ValidationReport, ValidationStatus
+from protocol_templates.base import BaseProtocolTemplate
 
 
 class ManagementSummaryTemplate(BaseProtocolTemplate):
@@ -346,6 +353,45 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
             protocol.key_outcomes = "Встреча проведена. Итоги зафиксированы."
 
         return protocol
+
+    # ── assemble_from_llm_json ───────────────────────────────────────────
+
+    def assemble_from_llm_json(self, protocol: Protocol, atomic_items: list,
+                                llm_data: dict, meeting_metadata: dict) -> Protocol:
+        protocol.protocol_title = llm_data.get("protocol_title", protocol.protocol_title or "")
+        protocol.meeting_purpose = llm_data.get("purpose", "")
+        protocol.management_summary = llm_data.get("management_summary", "")
+        protocol.key_outcomes = llm_data.get("key_outcomes", llm_data.get("management_summary", ""))
+        protocol.control_points = llm_data.get("control_points", "")
+        self._fill_items(protocol, atomic_items)
+        return protocol
+
+    def _fill_items(self, protocol: Protocol, atomic_items: list):
+        if not protocol.decisions:
+            for i, ai in enumerate(a for a in atomic_items if a.item_type == "решение" and a.explicit_agreement):
+                protocol.decisions.append(DecisionItem(
+                    decision_id=f"d_{i}", source_context_id=ai.source_context_id,
+                    decision_text=ai.text, explicit_agreement=ai.explicit_agreement,
+                    confidence=ai.confidence, evidence=ai.evidence,
+                ))
+        if not protocol.questions:
+            for i, ai in enumerate(a for a in atomic_items if a.item_type == "вопрос"):
+                protocol.questions.append(QuestionItem(
+                    question_id=f"q_{i}", source_context_id=ai.source_context_id,
+                    question_text=ai.text,
+                ))
+        if not protocol.risks:
+            for i, ai in enumerate(a for a in atomic_items if a.item_type in ("риск", "ограничение", "зависимость")):
+                protocol.risks.append(RiskItem(
+                    risk_id=f"r_{i}", source_context_id=ai.source_context_id,
+                    risk_text=ai.text,
+                ))
+        if not protocol.tasks:
+            for i, ai in enumerate(a for a in atomic_items if a.item_type == "задача" and a.commitment_confirmed):
+                protocol.tasks.append(TaskItem(
+                    task_id=f"t_{i}", source_context_id=ai.source_context_id,
+                    task_text=ai.text, commitment_confirmed=ai.commitment_confirmed,
+                ))
 
     # ── assemble_with_llm_output ─────────────────────────────────────────
 

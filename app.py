@@ -1,15 +1,15 @@
 import sys
 import tkinter as tk
-from tkinter import messagebox
 from pathlib import Path
+from tkinter import messagebox
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
 def main():
-    from ui.main_window import MainWindow
-    from settings import DATA_DIR
     from services.batch_service import BatchService
+    from settings import DATA_DIR
+    from ui.main_window import MainWindow
 
     root = tk.Tk()
     root.withdraw()
@@ -32,12 +32,12 @@ def main():
                     qc = get_queue_controller()
                     qc.batch_service.batch_run = batch
                     root.deiconify()
-                    app = MainWindow(root)
+                    _ = MainWindow(root)
                     root.mainloop()
                     return
 
     root.deiconify()
-    app = MainWindow(root)
+    _ = MainWindow(root)
     root.mainloop()
 
 

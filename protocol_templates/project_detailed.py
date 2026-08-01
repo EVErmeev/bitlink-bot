@@ -2,9 +2,17 @@ import re
 import uuid
 from datetime import date
 
-from protocol_templates.base import BaseProtocolTemplate
-from models.protocol import Protocol, TopicBlock, DecisionItem, QuestionItem, RiskItem, TaskItem, AtomicItem
+from models.protocol import (
+    AtomicItem,
+    DecisionItem,
+    Protocol,
+    QuestionItem,
+    RiskItem,
+    TaskItem,
+    TopicBlock,
+)
 from models.validation import ValidationReport, ValidationStatus
+from protocol_templates.base import BaseProtocolTemplate
 
 
 class ProjectDetailedTemplate(BaseProtocolTemplate):
@@ -143,7 +151,7 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         resp = tb.status_responsible if tb.status_responsible else "Ответственный не определён"
         dl = tb.status_deadline if tb.status_deadline else "Срок не определён"
         parts.append(f"{resp}, {dl}")
-        return ". ".join(parts) if parts else (f"Ответственный не определён, Срок не определён")
+        return ". ".join(parts) if parts else ("Ответственный не определён, Срок не определён")
 
     # ── Keyword clustering ──────────────────────────────────────────────
 
@@ -293,10 +301,10 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
         titles = []
 
-        LQ = "\u00ab"
-        RQ = "\u00bb"
+        lq = "\u00ab"
+        rq = "\u00bb"
         title_patterns = [
-            "(?:" + "Тематический блок" + "|" + "Тема" + r")\s*\d*\s*[" + LQ + r":](.+?)[" + RQ + r":]",
+            "(?:" + "Тематический блок" + "|" + "Тема" + r")\s*\d*\s*[" + lq + r":](.+?)[" + rq + r":]",
             r"(?:###|##)\s*(.+?)(?:\n|$)",
             r"\*\*(.+?)\*\*",
         ]
@@ -304,7 +312,7 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for pattern in title_patterns:
             matches = re.findall(pattern, llm_output, re.IGNORECASE)
             for m in matches:
-                clean = m.strip().strip(LQ + RQ + '"')
+                clean = m.strip().strip(lq + rq + '"')
                 if len(clean) > 5 and clean not in titles:
                     titles.append(clean)
 
@@ -458,6 +466,81 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
             tb.word_count = len(re.findall(r"\b\w+\b", tb.discussion_content + " " + tb.conclusion))
 
         return protocol
+
+    # ── assemble_from_llm_json ───────────────────────────────────────────
+
+    def assemble_from_llm_json(self, protocol: Protocol, atomic_items: list,
+                                llm_data: dict, meeting_metadata: dict) -> Protocol:
+        protocol.protocol_title = llm_data.get("protocol_title", protocol.protocol_title or "")
+        protocol.meeting_purpose = llm_data.get("purpose_and_context", llm_data.get("meeting_purpose", ""))
+        protocol.meeting_context = llm_data.get("meeting_context", llm_data.get("purpose_and_context", ""))
+        protocol.key_outcomes = llm_data.get("key_outcomes", "")
+        protocol.current_state = llm_data.get("current_state", "")
+        if llm_data.get("participants"):
+            protocol.participants = [p if isinstance(p, dict) else {"name": str(p)} for p in llm_data["participants"]]
+
+        topic_blocks_data = llm_data.get("topic_blocks", [])
+        protocol.topic_blocks = []
+        for i, tb_data in enumerate(topic_blocks_data):
+            tb = TopicBlock(
+                topic_id=tb_data.get("topic_id", f"tb_{i}"),
+                title=tb_data.get("title", f"Тема {i + 1}"),
+                source_context_id=protocol.source_context_id,
+                discussion_content=tb_data.get("discussion_content", ""),
+                conclusion=tb_data.get("conclusion", ""),
+                status_text=tb_data.get("status_text", ""),
+                status_reason=tb_data.get("status_reason", ""),
+                status_next_action=tb_data.get("status_next_action", ""),
+                status_responsible=tb_data.get("status_responsible", ""),
+                status_deadline=tb_data.get("status_deadline", ""),
+                order=i + 1,
+                word_count=len(tb_data.get("discussion_content", "").split()),
+                source_item_ids=tb_data.get("source_item_ids", []),
+                evidence=tb_data.get("evidence", []),
+            )
+            protocol.topic_blocks.append(tb)
+
+        if not any(tb.source_item_ids for tb in protocol.topic_blocks) and atomic_items:
+            from services.topic_coverage import (
+                build_topic_registry,
+                map_atomic_items_to_topics,
+            )
+            registry = build_topic_registry(protocol)
+            registry = map_atomic_items_to_topics(protocol, registry)
+            for tb in protocol.topic_blocks:
+                if tb.topic_id in registry:
+                    tb.source_item_ids = registry[tb.topic_id].get("source_item_ids", [])
+
+        self._fill_from_atomic_items(protocol, atomic_items)
+
+        return protocol
+
+    def _fill_from_atomic_items(self, protocol: Protocol, atomic_items: list):
+        if not protocol.decisions:
+            for i, ai in enumerate(a for a in atomic_items if a.item_type == "решение" and a.explicit_agreement):
+                protocol.decisions.append(DecisionItem(
+                    decision_id=f"d_{i}", source_context_id=ai.source_context_id,
+                    decision_text=ai.text, explicit_agreement=ai.explicit_agreement,
+                    confidence=ai.confidence, evidence=ai.evidence,
+                ))
+        if not protocol.questions:
+            for i, ai in enumerate(a for a in atomic_items if a.item_type == "вопрос"):
+                protocol.questions.append(QuestionItem(
+                    question_id=f"q_{i}", source_context_id=ai.source_context_id,
+                    question_text=ai.text,
+                ))
+        if not protocol.risks:
+            for i, ai in enumerate(a for a in atomic_items if a.item_type in ("риск", "ограничение", "зависимость")):
+                protocol.risks.append(RiskItem(
+                    risk_id=f"r_{i}", source_context_id=ai.source_context_id,
+                    risk_text=ai.text,
+                ))
+        if not protocol.tasks:
+            for i, ai in enumerate(a for a in atomic_items if a.item_type == "задача" and a.commitment_confirmed):
+                protocol.tasks.append(TaskItem(
+                    task_id=f"t_{i}", source_context_id=ai.source_context_id,
+                    task_text=ai.text, commitment_confirmed=ai.commitment_confirmed,
+                ))
 
     # ── assemble_with_llm_output ─────────────────────────────────────────
 

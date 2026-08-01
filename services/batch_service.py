@@ -1,11 +1,12 @@
 import json
 from pathlib import Path
-from models.batch import BatchRun, BatchItem
+
+from models.batch import BatchItem, BatchRun
 
 try:
     from services.runtime_estimator import RuntimeEstimator
 except ImportError:
-    from runtime_estimator import RuntimeEstimator
+    from runtime_estimator import RuntimeEstimator  # type: ignore[no-redef]
 
 
 class BatchService:
@@ -48,7 +49,7 @@ class BatchService:
     def load_state(self, filepath: Path) -> BatchRun | None:
         if not filepath.exists():
             return None
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             data = json.load(f)
         self.batch_run = BatchRun.from_dict(data)
         return self.batch_run
@@ -73,3 +74,23 @@ class BatchService:
                     "status": item.status,
                 })
         return result
+
+    def normalize_after_recovery(self):
+        """Convert 'processing' items to 'pending' for recovery."""
+        if not self.batch_run:
+            return
+        for item in self.batch_run.items:
+            if item.status == "processing":
+                item.status = "pending"
+                item.status_message = "Recovered after interruption"
+            elif item.status == "validation_failed":
+                pass
+            elif item.status == "failed":
+                pass
+
+    def archive_state(self, state_path):
+        import shutil
+        from datetime import datetime
+        if state_path.exists():
+            archive_name = state_path.with_name(f"batch_state_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+            shutil.move(str(state_path), str(archive_name))

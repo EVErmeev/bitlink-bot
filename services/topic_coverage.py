@@ -10,22 +10,42 @@ def build_topic_registry(protocol) -> dict:
 
 
 def map_atomic_items_to_topics(protocol, registry) -> dict:
-    """Map each atomic item to a topic based on keyword overlap."""
+    """Map each atomic item to a topic based on keyword overlap.
+
+    First uses explicit source_item_ids from topic blocks if available,
+    then backfills unmapped items by keyword overlap.
+    """
+    for tb in protocol.topic_blocks:
+        if tb.topic_id in registry and hasattr(tb, "source_item_ids") and tb.source_item_ids:
+            registry[tb.topic_id]["source_item_ids"] = list(tb.source_item_ids)
+
+    all_mapped = set()
+    for r in registry.values():
+        all_mapped.update(r["source_item_ids"])
+
     for ai in getattr(protocol, "atomic_items", []):
+        if ai.item_id in all_mapped:
+            continue
         best_topic = None
         best_score = 0
         ai_words = set(ai.text.lower().split())
         for tb in protocol.topic_blocks:
             tb_words = set(tb.discussion_content.lower().split())
             common = ai_words & tb_words
-            score = len(common)
-            if score > best_score:
+            score = len([w for w in common if len(w) > 4])
+            if score > best_score and score >= 2:
                 best_score = score
                 best_topic = tb.topic_id
-        if best_topic and best_score > 0:
+        if best_topic:
             if best_topic in registry:
                 registry[best_topic]["source_item_ids"].append(ai.item_id)
     return registry
+
+
+def save_coverage_report(coverage_data: dict, output_path):
+    """Save topic coverage report as JSON file."""
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(coverage_data, f, indent=2, ensure_ascii=False)
 
 
 def audit_topic_coverage(protocol) -> dict:

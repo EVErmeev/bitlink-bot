@@ -1,6 +1,6 @@
 import hashlib
 import uuid
-from pathlib import Path
+
 from models.validation import ValidationReport, ValidationStatus
 
 
@@ -53,10 +53,10 @@ def validate_source_alignment(protocol, expected_source_context_id: str) -> Vali
     return report
 
 
-def create_input_manifest(source_path: Path, source_context_id: str, source_sha256: str,
+def create_input_manifest(source_path: str | None, source_context_id: str, source_sha256: str,
                           source_type: str, item_id: str) -> dict:
     return {
-        "source_path": str(source_path),
+        "source_path": source_path or "",
         "source_context_id": source_context_id,
         "source_sha256": source_sha256,
         "source_type": source_type,

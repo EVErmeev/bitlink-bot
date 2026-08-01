@@ -1,8 +1,7 @@
-import re
 import hashlib
-from datetime import date, time, datetime
+import re
+from datetime import date, time
 from pathlib import Path
-
 
 DATE_PATTERNS = [
     (re.compile(r"(\d{4})[_\-.](\d{2})[_\-.](\d{2})[T_ ](\d{2})[_\-.](\d{2})"), True),

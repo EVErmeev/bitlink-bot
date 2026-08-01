@@ -1,0 +1,15 @@
+[tool.ruff]
+target-version = "py311"
+exclude = [".git", ".venv", "venv", "debug", "data", "__pycache__", ".pytest_cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.format]
+# No formatting rules needed
+
+[tool.mypy]
+ignore_missing_imports = true
+exclude = ["tests/", "debug/", "data/"]
+check_untyped_defs = false

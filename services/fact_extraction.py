@@ -1,8 +1,7 @@
 import re
 import uuid
-from datetime import datetime, timedelta
-from models.protocol import AtomicItem
 
+from models.protocol import AtomicItem
 
 SPEAKER_PATTERN = re.compile(
     r"^(?:\[(?P<timestamp>\d{2}:\d{2}(?::\d{2})?)\]\s*)?"

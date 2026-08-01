@@ -1,10 +1,8 @@
-import pytest
 import sys
 from pathlib import Path
-from datetime import date
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from models.protocol import Protocol, TopicBlock, DecisionItem
 from models.batch import BatchItem
 from services.processing_service import ProcessingService
 
