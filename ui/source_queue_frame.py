@@ -588,6 +588,49 @@ class SourceQueueFrame(ttk.Frame):
 
         ttk.Button(dlg, text="Закрыть", command=dlg.destroy).pack(pady=10)
 
+    def _show_internal_error(self, error_msg: str, traceback_text: str):
+        root = self.winfo_toplevel()
+        dlg = tk.Toplevel(root)
+        dlg.title("Внутренняя ошибка")
+        dlg.geometry("650x450")
+        dlg.transient(root)
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="Произошла внутренняя ошибка при запуске",
+                  foreground="red", font=("Segoe UI", 11, "bold")).pack(padx=10, pady=(10, 5))
+
+        text_frame = ttk.Frame(dlg)
+        text_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        scrollbar = ttk.Scrollbar(text_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        error_text = tk.Text(text_frame, wrap=tk.WORD, font=("Consolas", 9),
+                             yscrollcommand=scrollbar.set)
+        error_text.pack(fill=tk.BOTH, expand=True)
+        scrollbar.configure(command=error_text.yview)
+        error_text.insert(tk.END, f"Ошибка: {error_msg}\n\n")
+        error_text.insert(tk.END, traceback_text)
+        error_text.configure(state=tk.DISABLED)
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        def copy_error():
+            dlg.clipboard_clear()
+            dlg.clipboard_append(f"Ошибка: {error_msg}\n\n{traceback_text}")
+
+        ttk.Button(btn_frame, text="Копировать", command=copy_error).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="Закрыть", command=dlg.destroy).pack(side=tk.RIGHT, padx=3)
+
+        # Save runtime error log
+        from pathlib import Path
+        log_dir = Path("debug")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_path = log_dir / "runtime_error.log"
+        from datetime import datetime
+        timestamp = datetime.now().isoformat()
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {error_msg}\n{traceback_text}\n---\n")
+
     def _start_processing(self):
         if self.qc.processing:
             return
@@ -599,32 +642,39 @@ class SourceQueueFrame(ttk.Frame):
             messagebox.showwarning("Предупреждение", "Очередь пуста")
             return
 
-        # Reset state
-        batch.cancel_requested = False
-        batch.stop_after_current = False
+        try:
+            # Reset state
+            batch.cancel_requested = False
+            batch.stop_after_current = False
 
-        config = get_runtime_config()
-        items = [i for i in batch.items if i.status not in ("completed", "skipped")]
+            config = get_runtime_config()
+            items = [i for i in batch.items if i.status not in ("completed", "skipped")]
 
-        if not items:
-            self._show_nothing_to_process(batch)
-            return
+            if not items:
+                self._show_nothing_to_process(batch)
+                return
 
-        # Gather unique source types from pending items
-        source_types = list(set(i.source_type or "local_transcript" for i in items))
-        preflight = run_preflight(items, config, source_types=source_types)
+            # Run preflight — it determines source_type from each BatchItem
+            preflight = run_preflight(items, config)
 
-        if preflight["has_blocking"]:
-            self._show_preflight_blocking(preflight)
-            return
+            if preflight["has_blocking"]:
+                self._show_preflight_blocking(preflight)
+                return
 
-        if preflight["has_warnings"]:
-            self._show_preflight_warnings(preflight)
-            return
+            if preflight["has_warnings"]:
+                self._show_preflight_warnings(preflight)
+                return
 
-        # No blocking, no warnings — start immediately
-        self._log_event("preflight_passed", 0, None, "info", f"Preflight passed, {preflight['items_checked']} items checked")
-        self._do_start_processing()
+            # No blocking, no warnings — start immediately
+            self._log_event("preflight_passed", 0, None, "info", f"Preflight passed, {preflight['items_checked']} items checked")
+            self._do_start_processing()
+        except Exception as e:
+            self.start_btn.configure(state=tk.NORMAL)
+            self.stop_btn.configure(state=tk.DISABLED)
+            import traceback
+            tb = traceback.format_exc()
+            self._log_event("preflight_internal_error", 0, None, "error", str(e))
+            self._show_internal_error(str(e), tb)
 
     def _show_preflight_warnings(self, preflight):
         root = self.winfo_toplevel()

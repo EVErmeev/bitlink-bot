@@ -92,7 +92,7 @@ class RuntimeConfig:
 
     def is_demo_for_source(self, source_type: str) -> bool:
         effective = self.get_effective_services(source_type)
-        mock_services = [k for k, v in effective.items() if v == "mock" and k not in ("newton", "bitlink")]
+        mock_services = [k for k, v in effective.items() if v == "mock"]
         return len(mock_services) > 0
 
     def is_production_blocked(self, source_type: str) -> bool:
@@ -101,6 +101,11 @@ class RuntimeConfig:
             return True
         if effective.get("llm") == "mock":
             return True
+        if effective.get("llm") == "real":
+            if not self.llm_api_url:
+                return True
+            if not self.llm_api_key:
+                return True
         if effective.get("confluence") not in ("disabled", "mock", "rest"):
             return True
         return False
@@ -118,9 +123,11 @@ class RuntimeConfig:
         if self.is_production_blocked(source_type):
             parts = ["PRODUCTION BLOCKED"]
             if effective["llm"] == "mock":
-                parts.append("LLM: mock (configure real LLM)")
+                parts.append("LLM: mock")
+            elif effective["llm"] == "real" and (not self.llm_api_url or not self.llm_api_key):
+                parts.append("LLM: API URL/Key не настроены")
             if effective["confluence"] not in ("rest", "disabled"):
-                parts.append("Confluence: not configured")
+                parts.append("Confluence: не настроен")
             return " | ".join(parts)
         parts = ["PRODUCTION"]
         if effective["llm"] == "real":

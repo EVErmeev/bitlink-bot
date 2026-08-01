@@ -95,6 +95,8 @@ class TestProductionMode:
         c = RuntimeConfig()
         c.app_profile = "local_txt_production"
         c.llm_mode = "real"
+        c.llm_api_url = "https://api.example.com"
+        c.llm_api_key = "sk-test"
         c.confluence_mode = "rest"
         banner = c.get_banner_text("local_transcript")
         assert "PRODUCTION" in banner

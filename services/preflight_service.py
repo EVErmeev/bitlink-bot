@@ -153,7 +153,7 @@ def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list
             warnings.append(f"{item.display_name}: Newton ({config.newton_mode}) — транскрибация может быть недоступна")
 
     # Mixed mode protection
-    if config.is_demo_mode() and not item.dry_run:
+    if config.is_demo_for_source(item.source_type) and not item.dry_run:
         item.dry_run = True
         warnings.append(f"{item.display_name}: demo-режим — автоматически включён dry-run для защиты от публикации mock-контента")
 
