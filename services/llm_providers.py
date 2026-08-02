@@ -187,7 +187,8 @@ class OneBitNewtonCLIProvider:
                     _ts = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
                     with open(f"debug/cli_errors/summarize_{_ts}.log", "w", encoding="utf-8") as _f:
                         _f.write(f"EXIT: {proc_result.returncode}\nARGS: {args}\nSTDERR:\n{full_stderr}\nSTDOUT:\n{proc_result.stdout[:500]}")
-                except Exception: pass
+                except Exception:
+                    pass
                 if auth_code:
                     raise OneBitProviderError(stage="cli_execution", code=auth_code,
                         safe_message=auth_msg, exit_code=proc_result.returncode,
