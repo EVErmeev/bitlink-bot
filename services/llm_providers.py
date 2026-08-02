@@ -162,7 +162,7 @@ class OneBitNewtonCLIProvider:
             base = self._bnc(self.cli_path)
             args = base + ["summarize", "-", "--model", mdl, "--output", output_path]
             if system_prompt:
-                args += ["--system-prompt", system_prompt]
+                args += ["--system-prompt", system_prompt[:4000]]
 
             env = _os.environ.copy()
             env["NEWTON_TOKEN"] = self.token

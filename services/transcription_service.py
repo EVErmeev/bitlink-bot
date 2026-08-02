@@ -33,9 +33,8 @@ class TranscriptionClient:
             return True
         if self.provider == "disabled":
             return False
-        args = build_newton_command(self.cli_path, "transcribe", "--help")
-        r = run_process(args, timeout_seconds=15)
-        return r.returncode == 0
+        # Don't call CLI during connection check — just check config
+        return bool(self.token and self.cli_path)
 
     def transcribe_video(self, video_path: Path, output_dir: Path) -> str:
         if self.provider == "mock":
