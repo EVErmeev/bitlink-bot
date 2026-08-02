@@ -227,7 +227,10 @@ class OneBitNewtonCLIProvider:
                     response_type="multi_block")
 
             try:
-                json_mod.loads(output)
+                decoder = json_mod.JSONDecoder()
+                parsed, _end = decoder.raw_decode(output)
+                # Re-encode to get clean JSON string (drops trailing text)
+                output = json_mod.dumps(parsed, ensure_ascii=False)
             except json_mod.JSONDecodeError as e:
                 raise OneBitProviderError(stage="json_parse", code="JSON_PARSE_ERROR",
                     safe_message=f"Ответ не является валидным JSON: {e}", response_type="invalid_json")
