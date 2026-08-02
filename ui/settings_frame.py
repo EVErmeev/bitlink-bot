@@ -3,17 +3,22 @@ import json
 import os
 import threading
 import tkinter as tk
+from datetime import UTC, datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+import requests
 from dotenv import load_dotenv, set_key
 
 import settings
-from services.bitlink_service import BitlinkClient
-from services.confluence_service import ConfluenceClient
+from services.connection_checks import (
+    ConnectionCheckResult,
+    make_error_result,
+    make_mock_result,
+    make_not_configured_result,
+    make_not_implemented_result,
+)
 from services.runtime_config import reload_runtime_config
-from services.telegram_service import TelegramClient
-from services.transcription_service import TranscriptionClient
 
 
 class SettingsFrame(ttk.Frame):
@@ -31,11 +36,65 @@ class SettingsFrame(ttk.Frame):
         self.main_window = main_window
         self.env_path = Path(__file__).resolve().parent.parent / ".env"
         self._block_entries = {}
+        self._block_btn = {}
+        self._block_status = {}
+        self._service_blocks = []
         self._build()
         self._load_settings()
 
+    # ── UI helpers ──
+
+    def _run_on_ui(self, callback, *args):
+        if not self.winfo_exists():
+            return
+        self.after(0, lambda: callback(*args))
+
+    def _start_async_check(self, check_id, btn, status_label,
+                           worker_fn, on_complete):
+        if getattr(self, f'_checking_{check_id}', False):
+            return
+        setattr(self, f'_checking_{check_id}', True)
+        btn.configure(state=tk.DISABLED)
+        status_label.configure(text="Проверка...", foreground="blue")
+
+        def runner():
+            try:
+                result = worker_fn()
+            except Exception as e:
+                import traceback
+                result = ConnectionCheckResult(
+                    service_id=check_id, status="FAIL",
+                    stage="internal_error",
+                    safe_message=str(e)[:200],
+                    details={"traceback": traceback.format_exc()[-500:]})
+            finally:
+                def restore():
+                    try:
+                        btn.configure(state=tk.NORMAL)
+                        setattr(self, f'_checking_{check_id}', False)
+                    except Exception:
+                        pass
+                self._run_on_ui(restore)
+            self._run_on_ui(lambda r=result: on_complete(r))
+
+        threading.Thread(target=runner, daemon=True).start()
+
+    @staticmethod
+    def _color_for_status(status):
+        return {
+            "PASS": "green",
+            "FAIL": "red",
+            "MOCK": "#cc6600",
+            "NOT_IMPLEMENTED": "#cc6600",
+            "NOT_CONFIGURED": "gray",
+            "TIMEOUT": "red",
+            "SKIPPED": "gray",
+        }.get(status, "gray")
+
     def _make_block_key(self, title):
         return title.lower().replace(".", "_")
+
+    # ── Build ──
 
     def _build(self):
         canvas = tk.Canvas(self)
@@ -52,6 +111,9 @@ class SettingsFrame(ttk.Frame):
         top.pack(fill=tk.X, padx=10, pady=5)
         ttk.Label(top, text="Настройки", font=("Segoe UI", 14, "bold")).pack(side=tk.LEFT)
         ttk.Button(top, text="Назад", command=lambda: self.main_window.show_main_menu()).pack(side=tk.RIGHT)
+
+        ttk.Button(self.scrollable, text="Проверить все подключения",
+                   command=self._check_all_connections).pack(pady=5)
 
         self._build_block("БИТ.Link", [
             ("email", "Email:", None),
@@ -70,7 +132,8 @@ class SettingsFrame(ttk.Frame):
             ("space_key", "Space Key:", None),
             ("parent_page_id", "Parent Page ID:", None),
             ("parent_page_title", "Parent Page Title:", None),
-        ], self._test_confluence, extra_btn_text="Выбрать страницу")
+        ], self._test_confluence, extra_btn_text="Выбрать страницу",
+            extra_btn_command=self._choose_confluence_parent)
 
         self._build_block("Telegram", [
             ("bot_token", "Bot Token:", "*"),
@@ -78,12 +141,13 @@ class SettingsFrame(ttk.Frame):
         ], self._test_telegram)
 
         self._build_llm_block()
-
         self._build_protocol_block()
 
-        ttk.Button(self.scrollable, text="Сохранить настройки", command=self._save_settings).pack(pady=10)
+        ttk.Button(self.scrollable, text="Сохранить настройки",
+                   command=self._save_settings).pack(pady=10)
 
-    def _build_block(self, title, fields, test_callback, extra_btn_text=None):
+    def _build_block(self, title, fields, test_callback,
+                     extra_btn_text=None, extra_btn_command=None):
         frame = ttk.LabelFrame(self.scrollable, text=title, padding=10)
         frame.pack(fill=tk.X, padx=10, pady=5)
 
@@ -97,11 +161,30 @@ class SettingsFrame(ttk.Frame):
 
         btn_frame = ttk.Frame(frame)
         btn_frame.grid(row=len(fields), column=0, columnspan=2, pady=5, sticky=tk.W)
-        ttk.Button(btn_frame, text="Проверить подключение", command=test_callback).pack(side=tk.LEFT, padx=3)
-        if extra_btn_text:
-            ttk.Button(btn_frame, text=extra_btn_text, command=self._choose_confluence_parent).pack(side=tk.LEFT, padx=3)
 
-        self._block_entries[self._make_block_key(title)] = entries
+        btn = ttk.Button(btn_frame, text="Проверить подключение")
+        btn.pack(side=tk.LEFT, padx=3)
+        if extra_btn_text and extra_btn_command:
+            ttk.Button(btn_frame, text=extra_btn_text,
+                       command=extra_btn_command).pack(side=tk.LEFT, padx=3)
+
+        status_label = ttk.Label(frame, text="Не проверено", foreground="gray")
+        status_label.grid(row=len(fields) + 1, column=0, columnspan=2,
+                          sticky=tk.W, pady=2)
+
+        key = self._make_block_key(title)
+        btn.configure(command=lambda b=btn, sl=status_label, cb=test_callback: cb(b, sl))
+
+        self._block_entries[key] = entries
+        self._block_btn[key] = btn
+        self._block_status[key] = status_label
+        self._service_blocks.append({
+            "title": title,
+            "check_id": key,
+            "entries": entries,
+            "btn": btn,
+            "status_label": status_label,
+        })
 
     def _build_protocol_block(self):
         frame = ttk.LabelFrame(self.scrollable, text="Протокол", padding=10)
@@ -120,11 +203,12 @@ class SettingsFrame(ttk.Frame):
         mode_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
 
         self._continue_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frame, text="Продолжать обработку после ошибки", variable=self._continue_var).grid(
+        ttk.Checkbutton(frame, text="Продолжать обработку после ошибки",
+                        variable=self._continue_var).grid(
             row=2, column=0, columnspan=2, sticky=tk.W, pady=2
         )
 
-    # ── LLM block with three separate sub-panels ──
+    # ── LLM block ──
 
     def _build_llm_block(self):
         frame = ttk.LabelFrame(self.scrollable, text="Нейросеть / LLM", padding=10)
@@ -137,24 +221,22 @@ class SettingsFrame(ttk.Frame):
         provider_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         provider_combo.bind("<<ComboboxSelected>>", self._on_llm_provider_change)
 
-        # Status label shared across panels, below the provider row
+        # Status label
         ttk.Label(frame, text="Статус:").grid(row=1, column=0, sticky=tk.W, pady=2)
         self._llm_status_label = ttk.Label(frame, text="Не проверено", foreground="gray")
         self._llm_status_label.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # ── OneBit Newton CLI panel ──
+        # Sub-panels
         self._onebit_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
         self._onebit_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
         self._onebit_panel.grid_remove()
         self._build_onebit_panel()
 
-        # ── OpenAI compatible panel ──
         self._openai_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
         self._openai_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
         self._openai_panel.grid_remove()
         self._build_openai_panel()
 
-        # ── Mock panel ──
         self._mock_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
         self._mock_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
         self._mock_panel.grid_remove()
@@ -165,7 +247,6 @@ class SettingsFrame(ttk.Frame):
     def _build_onebit_panel(self):
         p = self._onebit_panel
 
-        # Row 0: token
         ttk.Label(p, text="Токен БИТ Ньютон:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self._llm_onebit_token_entry = ttk.Entry(p, width=50, show="*")
         self._llm_onebit_token_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
@@ -175,24 +256,20 @@ class SettingsFrame(ttk.Frame):
                         command=self._toggle_onebit_token_visibility).grid(
             row=0, column=2, sticky=tk.W, padx=5)
 
-        # Row 1: CLI path
         ttk.Label(p, text="Путь CLI:").grid(row=1, column=0, sticky=tk.W, pady=2)
         self._llm_onebit_cli_path_entry = ttk.Entry(p, width=50)
         self._llm_onebit_cli_path_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # Row 2: model
         ttk.Label(p, text="Модель:").grid(row=2, column=0, sticky=tk.W, pady=2)
         self._llm_onebit_model_var = tk.StringVar(value="gpt4")
         model_combo = ttk.Combobox(p, textvariable=self._llm_onebit_model_var, state="readonly", width=15)
         model_combo["values"] = ["llama", "gpt4"]
         model_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # Row 3: timeout
         ttk.Label(p, text="Таймаут (сек):").grid(row=3, column=0, sticky=tk.W, pady=2)
         self._llm_onebit_timeout_entry = ttk.Entry(p, width=10)
         self._llm_onebit_timeout_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
 
-        # Row 4: buttons
         btn_frame = ttk.Frame(p)
         btn_frame.grid(row=4, column=0, columnspan=3, pady=5, sticky=tk.W)
         ttk.Button(btn_frame, text="Обнаружить CLI", command=self._discover_cli).pack(side=tk.LEFT, padx=3)
@@ -200,7 +277,8 @@ class SettingsFrame(ttk.Frame):
         self._llm_version_btn.pack(side=tk.LEFT, padx=3)
         self._llm_health_btn = ttk.Button(btn_frame, text="Проверить health", command=self._check_cli_health)
         self._llm_health_btn.pack(side=tk.LEFT, padx=3)
-        self._llm_token_btn = ttk.Button(btn_frame, text="Проверить токен и LLM", command=self._check_cli_token_and_llm)
+        self._llm_token_btn = ttk.Button(btn_frame, text="Проверить токен и LLM",
+                                         command=self._check_cli_token_and_llm)
         self._llm_token_btn.pack(side=tk.LEFT, padx=3)
         ttk.Button(btn_frame, text="Копировать диагностику", command=self._copy_diagnostics).pack(side=tk.LEFT, padx=3)
 
@@ -231,7 +309,8 @@ class SettingsFrame(ttk.Frame):
     def _build_mock_panel(self):
         p = self._mock_panel
         ttk.Label(p, text="Демо-режим — проверка не требуется. Ответы генерируются локально.",
-                  foreground="#cc6600", wraplength=400).grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=5)
+                  foreground="#cc6600", wraplength=400).grid(
+            row=0, column=0, columnspan=3, sticky=tk.W, pady=5)
 
     # ── Panel switching ──
 
@@ -251,10 +330,9 @@ class SettingsFrame(ttk.Frame):
             self._llm_status_label.configure(text="Mock — проверка не требуется", foreground="#cc6600")
 
     def _on_llm_provider_change(self, event=None):
-        p = self._llm_provider_var.get()
-        self._show_provider_panel(p)
+        self._show_provider_panel(self._llm_provider_var.get())
 
-    # ── Token visibility toggles ──
+    # ── Token visibility ──
 
     def _toggle_onebit_token_visibility(self):
         show = self._llm_onebit_show_token_var.get()
@@ -264,7 +342,7 @@ class SettingsFrame(ttk.Frame):
         show = self._llm_openai_show_key_var.get()
         self._llm_openai_key_entry.configure(show="" if show else "*")
 
-    # ── Newton CLI diagnostics ──
+    # ── Newton CLI helpers ──
 
     def _get_cli_path(self):
         return self._llm_onebit_cli_path_entry.get().strip()
@@ -287,6 +365,8 @@ class SettingsFrame(ttk.Frame):
             return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", path, subcommand]
         return [path, subcommand]
 
+    # ── Newton CLI diagnostics ──
+
     def _discover_cli(self):
         import shutil
         candidates = [
@@ -304,7 +384,7 @@ class SettingsFrame(ttk.Frame):
         self._llm_status_label.configure(text="CLI не найден", foreground="red")
 
     def _check_cli_version(self):
-        from services.process_runner import run_process
+        from services.process_runner import run_process as _rp
 
         path = self._get_cli_path()
         if not path:
@@ -316,8 +396,8 @@ class SettingsFrame(ttk.Frame):
 
         def worker():
             args = self._build_cli_args("version")
-            result = run_process(args, timeout_seconds=15)
-            self.root.after(0, lambda: self._on_version_result(result))
+            result = _rp(args, timeout_seconds=15)
+            self._run_on_ui(lambda: self._on_version_result(result))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -331,7 +411,7 @@ class SettingsFrame(ttk.Frame):
                 text=f"CLI exit {result.returncode}: {result.stderr[:150]}", foreground="red")
 
     def _check_cli_health(self):
-        from services.process_runner import run_process
+        from services.process_runner import run_process as _rp
 
         path = self._get_cli_path()
         if not path:
@@ -343,8 +423,8 @@ class SettingsFrame(ttk.Frame):
 
         def worker():
             args = self._build_cli_args("health")
-            result = run_process(args, timeout_seconds=15)
-            self.root.after(0, lambda: self._on_health_result(result))
+            result = _rp(args, timeout_seconds=15)
+            self._run_on_ui(lambda: self._on_health_result(result))
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -382,13 +462,11 @@ class SettingsFrame(ttk.Frame):
 
         def worker():
             p = OneBitNewtonCLIProvider(cli_path=path, model=model, token=token, timeout_seconds=timeout)
-
             conn = p.check_connection()
             if not conn.ok:
-                self.root.after(0, lambda: self._on_token_result(
+                self._run_on_ui(lambda: self._on_token_result(
                     ok=False, text=f"CLI: {conn.safe_message}", foreground="red"))
                 return
-
             try:
                 result = p.generate(
                     system_prompt="Return valid JSON with exactly one key: status, value: ok. "
@@ -400,16 +478,16 @@ class SettingsFrame(ttk.Frame):
                 )
                 parsed = json.loads(result)
                 if parsed.get("status") == "ok":
-                    self.root.after(0, lambda: self._on_token_result(
+                    self._run_on_ui(lambda: self._on_token_result(
                         ok=True, text=f"OK — {model}", foreground="green"))
                 else:
-                    self.root.after(0, lambda: self._on_token_result(
+                    self._run_on_ui(lambda: self._on_token_result(
                         ok=True, text=f"OK, но неожиданный ответ: {result[:100]}",
                         foreground="#cc6600"))
             except OneBitProviderError as e:
-                self.root.after(0, lambda e=e: self._on_token_error(e))
+                self._run_on_ui(lambda e=e: self._on_token_error(e))
             except Exception as e:
-                self.root.after(0, lambda e=e: self._on_token_result(
+                self._run_on_ui(lambda e=e: self._on_token_result(
                     ok=False, text=f"Ошибка: {e}", foreground="red"))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -493,6 +571,277 @@ class SettingsFrame(ttk.Frame):
         except Exception as e:
             self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
 
+    # ── Service check implementations ──
+
+    def _check_bitlink_impl(self):
+        entries = self._block_entries.get("бит_link", {})
+        email_w = entries.get("email")
+        password_w = entries.get("password")
+        _ = email_w.get().strip() if email_w else ""
+        _ = password_w.get().strip() if password_w else ""
+
+        if settings.BITLINK_MOCK:
+            return make_mock_result("bitlink")
+        return make_not_implemented_result("bitlink")
+
+    def _check_newton_impl(self):
+        entries = self._block_entries.get("newton", {})
+        token_w = entries.get("token")
+        path_w = entries.get("path")
+        base_url_w = entries.get("base_url")
+        _ = token_w.get().strip() if token_w else ""
+        _ = path_w.get().strip() if path_w else ""
+        _ = base_url_w.get().strip() if base_url_w else ""
+
+        if settings.NEWTON_MOCK:
+            return make_mock_result("newton")
+        return make_not_implemented_result("newton")
+
+    def _check_confluence_impl(self):
+        entries = self._block_entries.get("confluence", {})
+        base_url = entries.get("base_url")
+        token_ent = entries.get("token")
+        space_key_ent = entries.get("space_key")
+        ppid_ent = entries.get("parent_page_id")
+        pptitle_ent = entries.get("parent_page_title")
+
+        base_url_val = base_url.get().strip().rstrip("/") if base_url else ""
+        token_val = token_ent.get().strip() if token_ent else ""
+        space_key_val = space_key_ent.get().strip() if space_key_ent else ""
+        parent_id_val = ppid_ent.get().strip() if ppid_ent else ""
+        parent_title_val = pptitle_ent.get().strip() if pptitle_ent else ""
+
+        if settings.CONFLUENCE_PROVIDER == "mock":
+            return make_mock_result("confluence")
+
+        if not base_url_val or not token_val:
+            missing = []
+            if not base_url_val:
+                missing.append("Base URL")
+            if not token_val:
+                missing.append("Токен")
+            return make_not_configured_result("confluence", missing)
+
+        headers = {"Authorization": f"Bearer {token_val}"}
+        start = datetime.now(UTC)
+
+        # Stage 1: auth check
+        try:
+            r = requests.get(f"{base_url_val}/rest/api/user/current",
+                             headers=headers, timeout=15)
+            if r.status_code != 200:
+                return ConnectionCheckResult(
+                    service_id="confluence", provider="rest",
+                    status="FAIL", stage="auth_check",
+                    safe_message=f"Ошибка аутентификации: HTTP {r.status_code}",
+                    http_status=r.status_code,
+                    endpoint_or_command=f"{base_url_val}/rest/api/user/current")
+            user_data = r.json()
+            user_display = user_data.get("displayName", user_data.get("username", "?"))
+        except requests.RequestException as e:
+            return ConnectionCheckResult(
+                service_id="confluence", provider="rest",
+                status="FAIL", stage="auth_check",
+                safe_message=f"Нет соединения: {str(e)[:200]}",
+                endpoint_or_command=f"{base_url_val}/rest/api/user/current")
+
+        # Stage 2: space check
+        if space_key_val:
+            try:
+                r = requests.get(f"{base_url_val}/rest/api/space/{space_key_val}",
+                                 headers=headers, timeout=15)
+                if r.status_code != 200:
+                    return ConnectionCheckResult(
+                        service_id="confluence", provider="rest",
+                        status="FAIL", stage="space_check",
+                        safe_message=f"Пространство '{space_key_val}' не найдено (HTTP {r.status_code})",
+                        http_status=r.status_code,
+                        endpoint_or_command=f"{base_url_val}/rest/api/space/{space_key_val}")
+            except requests.RequestException as e:
+                return ConnectionCheckResult(
+                    service_id="confluence", provider="rest",
+                    status="FAIL", stage="space_check",
+                    safe_message=f"Ошибка проверки пространства: {str(e)[:200]}")
+
+        # Stage 3: parent page check
+        if parent_id_val:
+            try:
+                r = requests.get(f"{base_url_val}/rest/api/content/{parent_id_val}",
+                                 headers=headers, timeout=15)
+                if r.status_code != 200:
+                    return ConnectionCheckResult(
+                        service_id="confluence", provider="rest",
+                        status="FAIL", stage="parent_check",
+                        safe_message=f"Родительская страница '{parent_id_val}' не найдена (HTTP {r.status_code})",
+                        http_status=r.status_code,
+                        endpoint_or_command=f"{base_url_val}/rest/api/content/{parent_id_val}")
+            except requests.RequestException as e:
+                return ConnectionCheckResult(
+                    service_id="confluence", provider="rest",
+                    status="FAIL", stage="parent_check",
+                    safe_message=f"Ошибка проверки родительской страницы: {str(e)[:200]}")
+
+        latency = (datetime.now(UTC) - start).total_seconds()
+        parent_info = f", родительская: {parent_title_val or parent_id_val}" if parent_id_val else ""
+        return ConnectionCheckResult(
+            service_id="confluence", provider="rest",
+            status="PASS", stage="all",
+            safe_message=f"OK — пользователь {user_display}, пространство {space_key_val}{parent_info}",
+            latency_seconds=latency,
+            endpoint_or_command=base_url_val)
+
+    def _check_telegram_impl(self):
+        entries = self._block_entries.get("telegram", {})
+        bot_token_w = entries.get("bot_token")
+        chat_id_w = entries.get("chat_id")
+        bot_token = bot_token_w.get().strip() if bot_token_w else ""
+        chat_id = chat_id_w.get().strip() if chat_id_w else ""
+
+        if settings.TELEGRAM_MOCK:
+            return make_mock_result("telegram")
+
+        if not bot_token:
+            return make_not_configured_result("telegram", ["Bot Token"])
+        if not chat_id:
+            return make_not_configured_result("telegram", ["Chat ID"])
+
+        start = datetime.now(UTC)
+
+        # Stage 1: getMe
+        try:
+            r = requests.get(f"https://api.telegram.org/bot{bot_token}/getMe", timeout=10)
+            if r.status_code != 200 or not r.json().get("ok"):
+                return ConnectionCheckResult(
+                    service_id="telegram", provider="real",
+                    status="FAIL", stage="getMe",
+                    safe_message=f"Ошибка getMe: HTTP {r.status_code}",
+                    http_status=r.status_code,
+                    endpoint_or_command="api.telegram.org/getMe")
+            bot_name = r.json().get("result", {}).get("username", "?")
+        except requests.RequestException as e:
+            return ConnectionCheckResult(
+                service_id="telegram", provider="real",
+                status="FAIL", stage="getMe",
+                safe_message=f"Нет соединения с Telegram API: {str(e)[:200]}")
+
+        # Stage 2: getChat
+        try:
+            r = requests.get(f"https://api.telegram.org/bot{bot_token}/getChat?chat_id={chat_id}", timeout=10)
+            if r.status_code != 200 or not r.json().get("ok"):
+                return ConnectionCheckResult(
+                    service_id="telegram", provider="real",
+                    status="FAIL", stage="getChat",
+                    safe_message=f"Ошибка getChat: chat_id={chat_id}, HTTP {r.status_code}",
+                    http_status=r.status_code)
+            chat_info = r.json().get("result", {})
+            chat_title = chat_info.get("title") or chat_info.get("first_name", chat_id)
+        except requests.RequestException as e:
+            return ConnectionCheckResult(
+                service_id="telegram", provider="real",
+                status="FAIL", stage="getChat",
+                safe_message=f"Ошибка getChat: {str(e)[:200]}")
+
+        latency = (datetime.now(UTC) - start).total_seconds()
+        return ConnectionCheckResult(
+            service_id="telegram", provider="real",
+            status="PASS", stage="all",
+            safe_message=f"OK — бот @{bot_name}, чат «{chat_title}»",
+            latency_seconds=latency,
+            endpoint_or_command="api.telegram.org")
+
+    # ── Test button callbacks (receive btn + status_label from _build_block) ──
+
+    def _test_bitlink(self, btn, status_label):
+        def worker_fn():
+            return self._check_bitlink_impl()
+        def on_complete(result):
+            color = self._color_for_status(result.status)
+            status_label.configure(text=result.safe_message[:200], foreground=color)
+        self._start_async_check("bitlink", btn, status_label, worker_fn, on_complete)
+
+    def _test_newton(self, btn, status_label):
+        def worker_fn():
+            return self._check_newton_impl()
+        def on_complete(result):
+            color = self._color_for_status(result.status)
+            status_label.configure(text=result.safe_message[:200], foreground=color)
+        self._start_async_check("newton", btn, status_label, worker_fn, on_complete)
+
+    def _test_confluence(self, btn, status_label):
+        def worker_fn():
+            return self._check_confluence_impl()
+        def on_complete(result):
+            color = self._color_for_status(result.status)
+            text = result.safe_message[:200]
+            if result.latency_seconds is not None:
+                text += f" ({result.latency_seconds:.1f}с)"
+            status_label.configure(text=text, foreground=color)
+        self._start_async_check("confluence", btn, status_label, worker_fn, on_complete)
+
+    def _test_telegram(self, btn, status_label):
+        def worker_fn():
+            return self._check_telegram_impl()
+        def on_complete(result):
+            color = self._color_for_status(result.status)
+            status_label.configure(text=result.safe_message[:200], foreground=color)
+        self._start_async_check("telegram", btn, status_label, worker_fn, on_complete)
+
+    # ── "Проверить все подключения" ──
+
+    def _check_all_connections(self):
+        dialog = tk.Toplevel(self)
+        dialog.title("Проверка всех подключений")
+        dialog.geometry("600x350")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        main_frame = ttk.Frame(dialog, padding=10)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(main_frame, text="Выполняется проверка...", font=("Segoe UI", 11)).pack(pady=5)
+
+        tree = ttk.Treeview(main_frame, columns=("service", "status", "message"), show="headings", height=10)
+        tree.heading("service", text="Сервис")
+        tree.heading("status", text="Статус")
+        tree.heading("message", text="Сообщение")
+        tree.column("service", width=130)
+        tree.column("status", width=100)
+        tree.column("message", width=340)
+        tree.pack(fill=tk.BOTH, expand=True, pady=5)
+
+        ttk.Button(main_frame, text="Закрыть", command=dialog.destroy).pack(pady=5)
+
+        service_map = {
+            "бит_link": ("БИТ.Link", self._check_bitlink_impl),
+            "newton": ("Newton", self._check_newton_impl),
+            "confluence": ("Confluence", self._check_confluence_impl),
+            "telegram": ("Telegram", self._check_telegram_impl),
+        }
+
+        def runner():
+            for check_id, (display_name, impl_fn) in service_map.items():
+                try:
+                    result = impl_fn()
+                except Exception:
+                    result = make_error_result(check_id, "Неизвестная ошибка")
+
+                tag = result.status.lower().replace("_", "")
+
+                def add_row(r=result, dn=display_name, t=tag):
+                    if not tree.winfo_exists():
+                        return
+                    tree.insert("", tk.END, values=(
+                        dn, r.status, r.safe_message[:200],
+                    ), tags=(t,))
+                    try:
+                        tree.tag_configure(t, foreground=SettingsFrame._color_for_status(r.status))
+                    except Exception:
+                        pass
+
+                self._run_on_ui(add_row)
+
+        threading.Thread(target=runner, daemon=True).start()
+
     # ── Load / Save ──
 
     def _load_settings(self):
@@ -519,11 +868,9 @@ class SettingsFrame(ttk.Frame):
         self._mode_var.set(os.getenv("PROTOCOL_MODE", "auto"))
         self._continue_var.set(os.getenv("BATCH_CONTINUE_AFTER_ERROR", "true").lower() in ("true", "1", "yes"))
 
-        # LLM provider
         provider = os.getenv("LLM_PROVIDER", "onebit_newton_cli")
         self._llm_provider_var.set(provider)
 
-        # OneBit Newton CLI fields
         onebit_token = os.getenv("ONEBIT_LLM_TOKEN", "") or os.getenv("NEWTON_TOKEN", "")
         self._llm_onebit_token_entry.delete(0, tk.END)
         self._llm_onebit_token_entry.insert(0, onebit_token)
@@ -535,7 +882,6 @@ class SettingsFrame(ttk.Frame):
         self._llm_onebit_timeout_entry.delete(0, tk.END)
         self._llm_onebit_timeout_entry.insert(0, os.getenv("ONEBIT_CLI_TIMEOUT_SECONDS", "120"))
 
-        # OpenAI fields
         self._llm_openai_url_entry.delete(0, tk.END)
         self._llm_openai_url_entry.insert(0, os.getenv("LLM_API_URL", ""))
         self._llm_openai_key_entry.delete(0, tk.END)
@@ -590,35 +936,7 @@ class SettingsFrame(ttk.Frame):
         reload_runtime_config()
         messagebox.showinfo("Успех", "Настройки сохранены")
 
-    # ── Other service tests ──
-
-    def _test_bitlink(self):
-        client = BitlinkClient()
-        if client.check_connection():
-            messagebox.showinfo("БИТ.Link", "Подключение успешно (mock-режим)")
-        else:
-            messagebox.showerror("БИТ.Link", "Ошибка подключения")
-
-    def _test_newton(self):
-        client = TranscriptionClient()
-        if client.check_connection():
-            messagebox.showinfo("Newton", "Подключение успешно (mock-режим)")
-        else:
-            messagebox.showerror("Newton", "Ошибка подключения")
-
-    def _test_confluence(self):
-        client = ConfluenceClient()
-        if client.check_connection():
-            messagebox.showinfo("Confluence", "Подключение успешно (mock-режим)")
-        else:
-            messagebox.showerror("Confluence", "Ошибка подключения")
-
-    def _test_telegram(self):
-        client = TelegramClient()
-        if client.check_connection():
-            messagebox.showinfo("Telegram", "Подключение успешно (mock-режим)")
-        else:
-            messagebox.showinfo("Telegram", "Telegram не настроен (опционально)")
+    # ── Confluence parent page chooser ──
 
     def _choose_confluence_parent(self):
         from ui.confluence_parent_dialog import ConfluenceParentDialog
