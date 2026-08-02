@@ -497,6 +497,8 @@ class SourceQueueFrame(ttk.Frame):
             return
         if item.error_details:
             self._show_error_dialog(item)
+        elif item.status in ("validation_failed", "failed"):
+            self._show_status_dialog(item)
         elif item.result_url:
             import webbrowser
             webbrowser.open(item.result_url)
