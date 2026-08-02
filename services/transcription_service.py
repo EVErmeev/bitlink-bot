@@ -2,7 +2,11 @@ import os
 from pathlib import Path
 
 from services.newton_cli import build_newton_command
-from services.process_runner import classify_auth_error, run_process
+from services.process_runner import (
+    classify_auth_error,
+    decode_process_output,
+    run_process,
+)
 from services.runtime_config import get_runtime_config
 
 
@@ -68,7 +72,9 @@ class TranscriptionClient:
             raise TranscriptionError(code="TRANSCRIPTION_OUTPUT_EMPTY",
                 safe_message="Транскрибация не создала выходной файл")
 
-        return out_file.read_text(encoding="utf-8")
+        raw = out_file.read_bytes()
+        text, encoding, _score = decode_process_output(raw, preferred_encoding="auto")
+        return text
 
 
 def _mock_transcribe(video_path: Path, output_dir: Path) -> str:
