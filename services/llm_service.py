@@ -46,39 +46,32 @@ class LLMClient:
         else:
             raise LLMConfigurationError(f"Unknown LLM provider: {pt}")
 
-    def generate(self, system_prompt: str, user_prompt: str,
-                 temperature: float = 0.3, max_tokens: int = 4096) -> str:
+    def generate(self, system_prompt, user_prompt,
+                 temperature=0.3, max_tokens=4096):
         return self._provider.generate(system_prompt, user_prompt, model=self.model,
                                        temperature=temperature, max_tokens=max_tokens)
 
     def generate_json(self, system_prompt, user_prompt, json_schema, *,
-                      temperature=0.1, max_retries=3) -> tuple[dict, str]:
+                      temperature=0.1, max_retries=3):
+        from services.json_response_parser import parse_and_validate_json
+
         for attempt in range(max_retries):
-            response = self.generate(
+            raw_response = self.generate(
                 system_prompt,
                 user_prompt + "\n\nReturn valid JSON conforming to this schema:\n"
                 + json.dumps(json_schema),
                 temperature=temperature,
             )
             try:
-                parsed = json.loads(response)
-                import jsonschema
-                try:
-                    jsonschema.validate(instance=parsed, schema=json_schema)
-                except jsonschema.ValidationError as ve:
-                    if attempt < max_retries - 1:
-                        continue
-                    raise RuntimeError(
-                        f"LLM output failed schema validation after {max_retries} retries: {ve}"
-                    ) from ve
-                return parsed, response
-            except json.JSONDecodeError:
+                parsed, errors = parse_and_validate_json(
+                    raw_response, json_schema, max_repair_attempts=0, generate_fn=None
+                )
+                return parsed, raw_response
+            except RuntimeError:
                 if attempt < max_retries - 1:
                     continue
-                raise RuntimeError(
-                    f"LLM output is not valid JSON after {max_retries} retries"
-                ) from None
-        return {}, ""
+                raise
+        raise RuntimeError(f"JSON generation failed after {max_retries} retries")
 
     def _save_llm_artifacts(self, debug_dir, system_prompt, user_prompt,
                             response_raw, parsed, schema):
@@ -102,5 +95,5 @@ class LLMClient:
         with open(debug_path / "llm_schema_validation.json", "w", encoding="utf-8") as f:
             json.dump(schema_result, f, indent=2, ensure_ascii=False)
 
-    def check_connection(self) -> bool:
+    def check_connection(self):
         return self._provider.check_connection().ok

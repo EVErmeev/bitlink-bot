@@ -471,9 +471,27 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
     def assemble_from_llm_json(self, protocol: Protocol, atomic_items: list,
                                 llm_data: dict, meeting_metadata: dict) -> Protocol:
-        protocol.protocol_title = llm_data.get("protocol_title", protocol.protocol_title or "")
-        protocol.meeting_purpose = llm_data.get("purpose_and_context", llm_data.get("meeting_purpose", ""))
-        protocol.meeting_context = llm_data.get("meeting_context", llm_data.get("purpose_and_context", ""))
+        # ── general_info ────────────────────────────────────
+        general_info = llm_data.get("general_info", {})
+        if isinstance(general_info, dict):
+            gi_title = general_info.get("protocol_title")
+            if gi_title:
+                protocol.protocol_title = gi_title
+            gi_date = general_info.get("meeting_date")
+            if gi_date and isinstance(gi_date, str):
+                try:
+                    protocol.meeting_date = date.fromisoformat(gi_date)
+                except ValueError:
+                    pass
+            gi_ctx = general_info.get("meeting_context")
+            if gi_ctx:
+                protocol.meeting_context = gi_ctx
+
+        # ── purpose and context — separate fields (not same text) ──
+        protocol.meeting_purpose = llm_data.get("meeting_purpose", "") or llm_data.get("purpose_and_context", "")
+        if not protocol.meeting_context:
+            protocol.meeting_context = llm_data.get("meeting_context", "") or llm_data.get("purpose_and_context", "")
+
         protocol.key_outcomes = llm_data.get("key_outcomes", "")
         protocol.current_state = llm_data.get("current_state", "")
         if llm_data.get("participants"):
@@ -511,93 +529,109 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
                 if tb.topic_id in registry:
                     tb.source_item_ids = registry[tb.topic_id].get("source_item_ids", [])
 
-        # Map decisions from LLM
+        # ── Map decisions from LLM (ALL fields, NO forced explicit_agreement/confidence) ──
         decisions_data = llm_data.get("decisions", [])
         if decisions_data:
             for i, d in enumerate(decisions_data):
-                if not isinstance(d, dict): continue
-                if not d.get("decision_text"): continue
+                if not isinstance(d, dict):
+                    continue
+                decision_text = d.get("decision_text") or d.get("text") or d.get("решение")
+                if not decision_text:
+                    continue
                 protocol.decisions.append(DecisionItem(
-                    decision_id=f"d_{i}", source_context_id=protocol.source_context_id,
-                    decision_text=d.get("decision_text", ""),
-                    context_and_basis=d.get("context_and_basis", "") or "Не указано в расшифровке",
-                    agreed_scope=d.get("agreed_scope", ""),
-                    boundaries=d.get("boundaries", ""),
-                    responsible=d.get("responsible", ""),
-                    deadline=d.get("deadline", ""),
-                    related_topic=d.get("related_topic", ""),
-                    order=i+1,
-                    explicit_agreement=True,
-                    confidence=0.9,
-                    evidence=d.get("evidence", ""),
+                    decision_id=d.get("decision_id", f"d_{i}"),
+                    source_context_id=d.get("source_context_id", "") or protocol.source_context_id,
+                    decision_text=decision_text,
+                    context_and_basis=d.get("context_and_basis", "") or d.get("context", "") or d.get("основание", ""),
+                    agreed_scope=d.get("agreed_scope", "") or d.get("scope", "") or d.get("что_согласовано", ""),
+                    boundaries=d.get("boundaries", "") or d.get("границы", ""),
+                    responsible=d.get("responsible", "") or d.get("ответственный", ""),
+                    deadline=d.get("deadline", "") or d.get("срок", ""),
+                    related_topic=d.get("related_topic", "") or d.get("связанная_тема", ""),
+                    order=i + 1,
+                    explicit_agreement=d.get("explicit_agreement", False),
+                    confidence=d.get("confidence", 0.0),
+                    evidence=d.get("evidence", "") or d.get("подтверждение", ""),
                 ))
         else:
             self._fill_decisions_from_atomic(protocol, atomic_items)
 
-        # Map questions from LLM
+        # ── Map questions from LLM (ALL fields + aliases) ──
         questions_data = llm_data.get("questions", [])
         if questions_data:
             for i, q in enumerate(questions_data):
-                if not isinstance(q, dict): continue
-                if not q.get("question_text"): continue
+                if not isinstance(q, dict):
+                    continue
+                question_text = q.get("question_text") or q.get("text") or q.get("вопрос")
+                if not question_text:
+                    continue
                 protocol.questions.append(QuestionItem(
-                    question_id=f"q_{i}", source_context_id=protocol.source_context_id,
-                    question_text=q.get("question_text", ""),
-                    context=q.get("context", ""),
-                    known_info=q.get("known_info", ""),
-                    to_determine=q.get("to_determine", ""),
-                    responsible=q.get("responsible", ""),
-                    deadline=q.get("deadline", ""),
-                    next_action=q.get("next_action", ""),
-                    status=q.get("status", ""),
-                    related_topic=q.get("related_topic", ""),
-                    order=i+1,
+                    question_id=q.get("question_id", f"q_{i}"),
+                    source_context_id=q.get("source_context_id", "") or protocol.source_context_id,
+                    question_text=question_text,
+                    context=q.get("context", "") or q.get("контекст", ""),
+                    known_info=q.get("known_info", "") or q.get("что_известно", ""),
+                    to_determine=q.get("to_determine", "") or q.get("что_определить", ""),
+                    responsible=q.get("responsible", "") or q.get("ответственный", ""),
+                    deadline=q.get("deadline", "") or q.get("срок", ""),
+                    next_action=q.get("next_action", "") or q.get("следующее_действие", ""),
+                    status=q.get("status", "") or q.get("статус", ""),
+                    related_topic=q.get("related_topic", "") or q.get("связанная_тема", ""),
+                    order=i + 1,
                 ))
         else:
             self._fill_questions_from_atomic(protocol, atomic_items)
 
-        # Map risks from LLM
+        # ── Map risks from LLM (ALL fields + aliases) ──
         risks_data = llm_data.get("risks", [])
         if risks_data:
             for i, r in enumerate(risks_data):
-                if not isinstance(r, dict): continue
-                if not r.get("risk_text"): continue
+                if not isinstance(r, dict):
+                    continue
+                risk_text = r.get("risk_text") or r.get("text") or r.get("риск")
+                if not risk_text:
+                    continue
                 protocol.risks.append(RiskItem(
-                    risk_id=f"r_{i}", source_context_id=protocol.source_context_id,
-                    risk_type=r.get("risk_type", ""),
-                    risk_text=r.get("risk_text", ""),
-                    reason=r.get("reason", ""),
-                    impact=r.get("impact", ""),
-                    trigger_condition=r.get("trigger_condition", ""),
-                    measures=r.get("measures", ""),
-                    responsible=r.get("responsible", ""),
-                    deadline=r.get("deadline", ""),
-                    status=r.get("status", ""),
-                    related_topic=r.get("related_topic", ""),
-                    order=i+1,
+                    risk_id=r.get("risk_id", f"r_{i}"),
+                    source_context_id=r.get("source_context_id", "") or protocol.source_context_id,
+                    risk_type=r.get("risk_type", "") or r.get("type", "") or r.get("тип", ""),
+                    risk_text=risk_text,
+                    reason=r.get("reason", "") or r.get("причина", ""),
+                    impact=r.get("impact", "") or r.get("влияние", ""),
+                    trigger_condition=r.get("trigger_condition", "") or r.get("условие_проявления", ""),
+                    measures=r.get("measures", "") or r.get("меры", ""),
+                    responsible=r.get("responsible", "") or r.get("ответственный", ""),
+                    deadline=r.get("deadline", "") or r.get("срок", ""),
+                    status=r.get("status", "") or r.get("статус", ""),
+                    related_topic=r.get("related_topic", "") or r.get("связанная_тема", ""),
+                    order=i + 1,
                 ))
         else:
             self._fill_risks_from_atomic(protocol, atomic_items)
 
-        # Map tasks from LLM
+        # ── Map tasks from LLM (ALL fields, NO forced commitment_confirmed=true) ──
         tasks_data = llm_data.get("tasks", [])
         if tasks_data:
             for i, t in enumerate(tasks_data):
-                if not isinstance(t, dict): continue
-                if not t.get("task_text"): continue
+                if not isinstance(t, dict):
+                    continue
+                task_text = t.get("task_text") or t.get("text") or t.get("задача")
+                if not task_text:
+                    continue
                 protocol.tasks.append(TaskItem(
-                    task_id=f"t_{i}", source_context_id=protocol.source_context_id,
-                    task_text=t.get("task_text", ""),
-                    basis=t.get("basis", ""),
-                    expected_result=t.get("expected_result", ""),
-                    responsible=t.get("responsible", ""),
-                    co_executors=t.get("co_executors", ""),
-                    deadline=t.get("deadline", ""),
-                    dependencies=t.get("dependencies", ""),
-                    status=t.get("status", ""),
-                    related_topic=t.get("related_topic", ""),
-                    order=i+1,
-                    commitment_confirmed=True,
+                    task_id=t.get("task_id", f"t_{i}"),
+                    source_context_id=t.get("source_context_id", "") or protocol.source_context_id,
+                    task_text=task_text,
+                    basis=t.get("basis", "") or t.get("основание", ""),
+                    expected_result=t.get("expected_result", "") or t.get("ожидаемый_результат", ""),
+                    responsible=t.get("responsible", "") or t.get("ответственный", ""),
+                    co_executors=t.get("co_executors", "") or t.get("соисполнители", ""),
+                    deadline=t.get("deadline", "") or t.get("срок", ""),
+                    dependencies=t.get("dependencies", "") or t.get("зависимости", ""),
+                    status=t.get("status", "") or t.get("статус", ""),
+                    related_topic=t.get("related_topic", "") or t.get("связанная_тема", ""),
+                    order=i + 1,
+                    commitment_confirmed=t.get("commitment_confirmed", False),
                 ))
         else:
             self._fill_tasks_from_atomic(protocol, atomic_items)

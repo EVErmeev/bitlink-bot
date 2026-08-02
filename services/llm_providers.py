@@ -144,9 +144,7 @@ class OneBitNewtonCLIProvider:
             safe_message=f"CLI exit {result.returncode}: {result.stderr[:200]}")
 
     def generate(self, system_prompt, user_prompt, *, model="", temperature=0.1, max_tokens=4096):
-        import json as json_mod
         import os as _os
-        import re as re_mod
 
         from services.process_runner import classify_auth_error, run_process
 
@@ -218,23 +216,6 @@ class OneBitNewtonCLIProvider:
                 raise OneBitProviderError(stage="output_read", code="EMPTY_RESPONSE",
                     safe_message="Ответ CLI пуст.", response_type="empty")
 
-            fences = re_mod.findall(r'```(?:json)?\s*\n?(.*?)```', output, re_mod.DOTALL)
-            if len(fences) == 1:
-                output = fences[0].strip()
-            elif len(fences) > 1:
-                raise OneBitProviderError(stage="json_extract", code="MULTIPLE_JSON_BLOCKS",
-                    safe_message=f"Ответ содержит {len(fences)} JSON-блоков. Ожидается один.",
-                    response_type="multi_block")
-
-            try:
-                decoder = json_mod.JSONDecoder()
-                parsed, _end = decoder.raw_decode(output)
-                # Re-encode to get clean JSON string (drops trailing text)
-                output = json_mod.dumps(parsed, ensure_ascii=False)
-            except json_mod.JSONDecodeError as e:
-                raise OneBitProviderError(stage="json_parse", code="JSON_PARSE_ERROR",
-                    safe_message=f"Ответ не является валидным JSON: {e}", response_type="invalid_json")
-
             return output
         finally:
             try:
@@ -271,7 +252,6 @@ class OneBitNewtonTranscriptionProvider:
 
     def transcribe(self, audio_path: str, output_dir: str = "", engine: str = "v3") -> str:
         import os as _os
-        import tempfile
 
         if not self.config.token:
             raise OneBitProviderError(stage="config", code="NO_TOKEN",
