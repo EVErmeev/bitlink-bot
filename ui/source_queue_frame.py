@@ -534,6 +534,31 @@ class SourceQueueFrame(ttk.Frame):
 
         ttk.Button(dlg, text="Закрыть", command=dlg.destroy).pack(pady=10)
 
+    def _show_status_dialog(self, item: BatchItem):
+        root = self.winfo_toplevel()
+        dlg = tk.Toplevel(root)
+        dlg.title(f"Статус: {item.display_name}")
+        dlg.geometry("500x320")
+        dlg.transient(root)
+        dlg.grab_set()
+        ttk.Label(dlg, text=f"Файл: {item.display_name}", font=("Segoe UI", 10, "bold")).pack(padx=10, pady=(10, 5))
+        ttk.Label(dlg, text=f"Статус: {item.status}").pack(padx=10)
+        if item.status_message:
+            ttk.Label(dlg, text=f"Сообщение: {item.status_message}", wraplength=450).pack(padx=10, pady=5)
+        if item.actual_seconds:
+            ttk.Label(dlg, text=f"Длительность: {item.actual_seconds:.1f} сек").pack(padx=10)
+        if item.debug_directory:
+            ttk.Label(dlg, text=f"Debug: {item.debug_directory}").pack(padx=10, pady=5)
+            proto = item.debug_directory / "protocol.json"
+            if proto.exists():
+                ttk.Label(dlg, text=f"Протокол JSON: {proto}").pack(padx=10)
+            html = item.debug_directory / "protocol_preview.html"
+            if html.exists():
+                ttk.Label(dlg, text=f"HTML preview: {html}").pack(padx=10)
+        if item.error_details:
+            ttk.Label(dlg, text=f"Ошибка: {item.error_details[:300]}", wraplength=450).pack(padx=10, pady=5)
+        ttk.Button(dlg, text="Закрыть", command=dlg.destroy).pack(pady=10)
+
     def _log_event(self, stage: str, percent: int, item, severity: str, message: str):
         try:
             batch = self.qc.batch_service.batch_run
@@ -669,6 +694,7 @@ class SourceQueueFrame(ttk.Frame):
 
             # No blocking, no warnings — start immediately
             self._log_event("preflight_passed", 0, None, "info", f"Preflight passed, {preflight['items_checked']} items checked")
+            self._elapsed_start = self._elapsed_start or datetime.now()
             self._do_start_processing()
         except Exception as e:
             self.start_btn.configure(state=tk.NORMAL)
@@ -791,6 +817,7 @@ class SourceQueueFrame(ttk.Frame):
                     self._update_progress(stage, percent, item)
         except queue.Empty:
             pass
+        self._update_eta()
         self.after(200, self._start_progress_checker)
 
     def _update_progress(self, stage, percent, item):
