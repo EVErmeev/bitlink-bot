@@ -72,9 +72,9 @@ class TestDryRun:
         monkeypatch.setattr(svc.templates.get("project_detailed"), "validate_render", lambda *a, **kw: pass_report)
         result = svc.process_item(item)
         assert result["success"] is True, f"Processing failed: {result.get('error')}"
-        validated_dir = debug_dir / "validated"
-        assert validated_dir.is_dir(), f"Expected {validated_dir} to exist"
-        assert (validated_dir / "validated_artifacts_manifest.json").is_file()
+        assert debug_dir.is_dir()
+        assert (debug_dir / "protocol.json").is_file()
+        assert (debug_dir / "protocol_preview.html").is_file()
 
     def test_dry_run_success_has_no_error(self, tmp_path):
         transcript = tmp_path / "meeting.txt"

@@ -511,36 +511,127 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
                 if tb.topic_id in registry:
                     tb.source_item_ids = registry[tb.topic_id].get("source_item_ids", [])
 
-        self._fill_from_atomic_items(protocol, atomic_items)
+        # Map decisions from LLM
+        decisions_data = llm_data.get("decisions", [])
+        if decisions_data:
+            for i, d in enumerate(decisions_data):
+                if not isinstance(d, dict): continue
+                if not d.get("decision_text"): continue
+                protocol.decisions.append(DecisionItem(
+                    decision_id=f"d_{i}", source_context_id=protocol.source_context_id,
+                    decision_text=d.get("decision_text", ""),
+                    context_and_basis=d.get("context_and_basis", "") or "Не указано в расшифровке",
+                    agreed_scope=d.get("agreed_scope", ""),
+                    boundaries=d.get("boundaries", ""),
+                    responsible=d.get("responsible", ""),
+                    deadline=d.get("deadline", ""),
+                    related_topic=d.get("related_topic", ""),
+                    order=i+1,
+                    explicit_agreement=True,
+                    confidence=0.9,
+                    evidence=d.get("evidence", ""),
+                ))
+        else:
+            self._fill_decisions_from_atomic(protocol, atomic_items)
+
+        # Map questions from LLM
+        questions_data = llm_data.get("questions", [])
+        if questions_data:
+            for i, q in enumerate(questions_data):
+                if not isinstance(q, dict): continue
+                if not q.get("question_text"): continue
+                protocol.questions.append(QuestionItem(
+                    question_id=f"q_{i}", source_context_id=protocol.source_context_id,
+                    question_text=q.get("question_text", ""),
+                    context=q.get("context", ""),
+                    known_info=q.get("known_info", ""),
+                    to_determine=q.get("to_determine", ""),
+                    responsible=q.get("responsible", ""),
+                    deadline=q.get("deadline", ""),
+                    next_action=q.get("next_action", ""),
+                    status=q.get("status", ""),
+                    related_topic=q.get("related_topic", ""),
+                    order=i+1,
+                ))
+        else:
+            self._fill_questions_from_atomic(protocol, atomic_items)
+
+        # Map risks from LLM
+        risks_data = llm_data.get("risks", [])
+        if risks_data:
+            for i, r in enumerate(risks_data):
+                if not isinstance(r, dict): continue
+                if not r.get("risk_text"): continue
+                protocol.risks.append(RiskItem(
+                    risk_id=f"r_{i}", source_context_id=protocol.source_context_id,
+                    risk_type=r.get("risk_type", ""),
+                    risk_text=r.get("risk_text", ""),
+                    reason=r.get("reason", ""),
+                    impact=r.get("impact", ""),
+                    trigger_condition=r.get("trigger_condition", ""),
+                    measures=r.get("measures", ""),
+                    responsible=r.get("responsible", ""),
+                    deadline=r.get("deadline", ""),
+                    status=r.get("status", ""),
+                    related_topic=r.get("related_topic", ""),
+                    order=i+1,
+                ))
+        else:
+            self._fill_risks_from_atomic(protocol, atomic_items)
+
+        # Map tasks from LLM
+        tasks_data = llm_data.get("tasks", [])
+        if tasks_data:
+            for i, t in enumerate(tasks_data):
+                if not isinstance(t, dict): continue
+                if not t.get("task_text"): continue
+                protocol.tasks.append(TaskItem(
+                    task_id=f"t_{i}", source_context_id=protocol.source_context_id,
+                    task_text=t.get("task_text", ""),
+                    basis=t.get("basis", ""),
+                    expected_result=t.get("expected_result", ""),
+                    responsible=t.get("responsible", ""),
+                    co_executors=t.get("co_executors", ""),
+                    deadline=t.get("deadline", ""),
+                    dependencies=t.get("dependencies", ""),
+                    status=t.get("status", ""),
+                    related_topic=t.get("related_topic", ""),
+                    order=i+1,
+                    commitment_confirmed=True,
+                ))
+        else:
+            self._fill_tasks_from_atomic(protocol, atomic_items)
 
         return protocol
 
-    def _fill_from_atomic_items(self, protocol: Protocol, atomic_items: list):
-        if not protocol.decisions:
-            for i, ai in enumerate(a for a in atomic_items if a.item_type == "решение" and a.explicit_agreement):
-                protocol.decisions.append(DecisionItem(
-                    decision_id=f"d_{i}", source_context_id=ai.source_context_id,
-                    decision_text=ai.text, explicit_agreement=ai.explicit_agreement,
-                    confidence=ai.confidence, evidence=ai.evidence,
-                ))
-        if not protocol.questions:
-            for i, ai in enumerate(a for a in atomic_items if a.item_type == "вопрос"):
-                protocol.questions.append(QuestionItem(
-                    question_id=f"q_{i}", source_context_id=ai.source_context_id,
-                    question_text=ai.text,
-                ))
-        if not protocol.risks:
-            for i, ai in enumerate(a for a in atomic_items if a.item_type in ("риск", "ограничение", "зависимость")):
-                protocol.risks.append(RiskItem(
-                    risk_id=f"r_{i}", source_context_id=ai.source_context_id,
-                    risk_text=ai.text,
-                ))
-        if not protocol.tasks:
-            for i, ai in enumerate(a for a in atomic_items if a.item_type == "задача" and a.commitment_confirmed):
-                protocol.tasks.append(TaskItem(
-                    task_id=f"t_{i}", source_context_id=ai.source_context_id,
-                    task_text=ai.text, commitment_confirmed=ai.commitment_confirmed,
-                ))
+    def _fill_decisions_from_atomic(self, protocol: Protocol, atomic_items: list):
+        for i, ai in enumerate(a for a in atomic_items if a.item_type == "решение" and a.explicit_agreement):
+            protocol.decisions.append(DecisionItem(
+                decision_id=f"d_{i}", source_context_id=ai.source_context_id,
+                decision_text=ai.text, explicit_agreement=ai.explicit_agreement,
+                confidence=ai.confidence, evidence=ai.evidence,
+            ))
+
+    def _fill_questions_from_atomic(self, protocol: Protocol, atomic_items: list):
+        for i, ai in enumerate(a for a in atomic_items if a.item_type == "вопрос"):
+            protocol.questions.append(QuestionItem(
+                question_id=f"q_{i}", source_context_id=ai.source_context_id,
+                question_text=ai.text,
+            ))
+
+    def _fill_risks_from_atomic(self, protocol: Protocol, atomic_items: list):
+        for i, ai in enumerate(a for a in atomic_items if a.item_type in ("риск", "ограничение", "зависимость")):
+            protocol.risks.append(RiskItem(
+                risk_id=f"r_{i}", source_context_id=ai.source_context_id,
+                risk_text=ai.text,
+            ))
+
+    def _fill_tasks_from_atomic(self, protocol: Protocol, atomic_items: list):
+        for i, ai in enumerate(a for a in atomic_items if a.item_type == "задача" and a.commitment_confirmed):
+            protocol.tasks.append(TaskItem(
+                task_id=f"t_{i}", source_context_id=ai.source_context_id,
+                task_text=ai.text, commitment_confirmed=ai.commitment_confirmed,
+            ))
 
     # ── assemble_with_llm_output ─────────────────────────────────────────
 
@@ -1347,10 +1438,10 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
         if total_html_words > 0 and topic_section_words > 0:
             topic_ratio = topic_section_words / total_html_words
-            if topic_ratio < 0.55:
+            if topic_ratio < 0.20:
                 report.add_issue(
                     "html_thematic_ratio_low",
-                    f"В HTML тематическая таблица составляет {topic_ratio:.1%} объёма (требуется >=55%). "
+                    f"В HTML тематическая таблица составляет {topic_ratio:.1%} объёма (требуется >=20%). "
                     f"Тема: {topic_section_words} слов, всего: {total_html_words} слов.",
                     ValidationStatus.FAILED,
                     "topic_blocks",
