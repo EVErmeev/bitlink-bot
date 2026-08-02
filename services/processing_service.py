@@ -3,6 +3,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import requests
+
 from models.batch import BatchItem
 from models.protocol import Protocol
 
@@ -179,14 +181,18 @@ class ProcessingService:
                 result["success"] = False
                 result["error"] = "Quality gate failed"
             else:
-                # Advisory or off — protocol succeeds
+                # Publish
                 item.status = "completed_with_warnings" if warnings else "completed"
                 if warnings:
                     item.status_message = f"Протокол сформирован с {len(warnings)} предупреждениями качества"
+                else:
+                    item.status_message = "Протокол сформирован"
                 result["success"] = True
 
-                # Publish if not dry-run
-                if not item.dry_run:
+                if item.dry_run:
+                    item.status_message = (item.status_message or "") + " (dry-run)"
+                else:
+                    # Real publication — Confluence required
                     self._report_progress("publishing_confluence", 90, item)
                     try:
                         parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
@@ -195,25 +201,51 @@ class ProcessingService:
                             storage_html=html,
                             parent_page_id=parent_id,
                         )
-                        result["url"] = page.get("url", "")
-                        item.result_url = str(result["url"])
+                        result_url = page.get("url", "")
+                        if not result_url:
+                            raise Exception("Confluence returned empty URL")
+                        result["url"] = result_url
+                        item.result_url = result_url
 
-                        if item.send_telegram:
+                        # Save pipeline result
+                        if item.debug_directory:
+                            import json as _json
+                            pipeline_result = {
+                                "source_type": item.source_type,
+                                "provider": self.config.llm_provider,
+                                "model": self.config.llm_model,
+                                "template": item.protocol_template,
+                                "confluence_page_id": page.get("id", ""),
+                                "confluence_url": result_url,
+                                "warnings": warnings,
+                            }
+                            with open(item.debug_directory / "pipeline_result.json", "w", encoding="utf-8") as f:
+                                _json.dump(pipeline_result, f, indent=2, ensure_ascii=False)
+
+                        # Telegram — only after successful Confluence
+                        if item.send_telegram and self.config.telegram_provider not in ("disabled", "mock"):
                             self._report_progress("sending_telegram", 95, item)
-                            try:
-                                self.telegram.send_notification(
-                                    protocol_title=protocol.protocol_title,
-                                    meeting_date=protocol.meeting_date.isoformat() if protocol.meeting_date else "",
-                                    key_result=(protocol.key_outcomes or "")[:200],
-                                    confluence_url=result["url"],
-                                )
-                            except Exception as te:
-                                print(f"Telegram: {te}")
+                            tg_ok, tg_msg_id = self._send_telegram_protocol(protocol, result_url, item)
+if tg_ok:
+                item.status_message = (item.status_message or "") + " | Telegram: отправлен"
+                if item.debug_directory:
+                    try:
+                        with open(item.debug_directory / "pipeline_result.json", "r", encoding="utf-8") as f:
+                            pr = _json.load(f)
+                        pr["telegram_message_id"] = tg_msg_id
+                        with open(item.debug_directory / "pipeline_result.json", "w", encoding="utf-8") as f:
+                            _json.dump(pr, f, indent=2, ensure_ascii=False)
+                    except Exception:
+                        pass
+                            else:
+                                item.status = "notification_failed"
+                                item.status_message = (item.status_message or "") + " | Telegram: ошибка отправки"
                     except Exception as ce:
-                        item.status_message = (item.status_message or "") + f" | Confluence: {ce}"
-
-                if item.dry_run:
-                    item.status_message = (item.status_message or "") + " (dry-run)"
+                        item.status = "publication_failed"
+                        item.status_message = f"Ошибка публикации: {ce}"
+                        item.error_details = str(ce)
+                        result["success"] = False
+                        result["error"] = f"Confluence: {ce}"
 
             return result
 
@@ -391,3 +423,28 @@ class ProcessingService:
     def _report_progress(self, stage: str, percent: float, item: BatchItem):
         if self.progress_callback:
             self.progress_callback(stage, percent, item)
+
+    def _send_telegram_protocol(self, protocol, url, item):
+        """Send Telegram notification. Returns (ok, message_id)."""
+        try:
+            title = protocol.protocol_title or item.display_name
+            date_str = ""
+            if protocol.meeting_date:
+                date_str = protocol.meeting_date.strftime("%d.%m.%Y")
+                if protocol.meeting_time:
+                    date_str += " " + protocol.meeting_time.strftime("%H:%M")
+            msg = f"Тема встречи: {title}\n"
+            if date_str:
+                msg += f"Дата: {date_str}\n\n"
+            msg += f"Протокол в Confluence:\n{url}\n\nИсточник записи: локальный файл"
+
+            resp = requests.post(
+                f"https://api.telegram.org/bot{self.config.telegram_bot_token}/sendMessage",
+                json={"chat_id": self.config.telegram_chat_id, "text": msg},
+                timeout=15,
+            )
+            if resp.status_code == 200 and resp.json().get("ok"):
+                return True, resp.json()["result"]["message_id"]
+            return False, None
+        except Exception:
+            return False, None

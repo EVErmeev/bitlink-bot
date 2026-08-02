@@ -82,6 +82,7 @@ class QueueController:
                 batch.current_index = i
                 item.status = "processing"
                 item.error_details = None
+                item.debug_directory = Path("debug") / batch.batch_id[:8] / item.item_id[:8]
                 result = service.process_item(item)
 
                 if not result["success"] and not config.batch_continue_after_error:
@@ -495,13 +496,12 @@ class SourceQueueFrame(ttk.Frame):
         item = self._find_item(sel[0])
         if not item:
             return
-        if item.error_details:
+        if item.result_url:
+            import webbrowser; webbrowser.open(item.result_url)
+        elif item.error_details:
             self._show_error_dialog(item)
-        elif item.status in ("validation_failed", "failed"):
+        elif item.status in ("completed", "completed_with_warnings"):
             self._show_status_dialog(item)
-        elif item.result_url:
-            import webbrowser
-            webbrowser.open(item.result_url)
 
     def _show_error_dialog(self, item: BatchItem):
         root = self.winfo_toplevel()
@@ -538,7 +538,7 @@ class SourceQueueFrame(ttk.Frame):
         root = self.winfo_toplevel()
         dlg = tk.Toplevel(root)
         dlg.title(f"Статус: {item.display_name}")
-        dlg.geometry("500x320")
+        dlg.geometry("500x380")
         dlg.transient(root)
         dlg.grab_set()
         ttk.Label(dlg, text=f"Файл: {item.display_name}", font=("Segoe UI", 10, "bold")).pack(padx=10, pady=(10, 5))
@@ -557,7 +557,29 @@ class SourceQueueFrame(ttk.Frame):
                 ttk.Label(dlg, text=f"HTML preview: {html}").pack(padx=10)
         if item.error_details:
             ttk.Label(dlg, text=f"Ошибка: {item.error_details[:300]}", wraplength=450).pack(padx=10, pady=5)
-        ttk.Button(dlg, text="Закрыть", command=dlg.destroy).pack(pady=10)
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(fill=tk.X, padx=10, pady=10)
+
+        if item.result_url:
+            def _open_confluence():
+                import webbrowser
+                webbrowser.open(item.result_url)
+            ttk.Button(btn_frame, text="Открыть в Confluence", command=_open_confluence).pack(side=tk.LEFT, padx=3)
+
+        if item.debug_directory:
+            html_path = item.debug_directory / "protocol_preview.html"
+            if html_path.exists():
+                def _open_html():
+                    import webbrowser
+                    webbrowser.open(str(html_path))
+                ttk.Button(btn_frame, text="Открыть локальный HTML", command=_open_html).pack(side=tk.LEFT, padx=3)
+            def _open_folder():
+                import subprocess
+                subprocess.Popen(f'explorer "{item.debug_directory.resolve()}"')
+            ttk.Button(btn_frame, text="Открыть папку результата", command=_open_folder).pack(side=tk.LEFT, padx=3)
+
+        ttk.Button(btn_frame, text="Закрыть", command=dlg.destroy).pack(side=tk.RIGHT, padx=3)
 
     def _log_event(self, stage: str, percent: int, item, severity: str, message: str):
         try:

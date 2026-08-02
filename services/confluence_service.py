@@ -5,6 +5,20 @@ import requests
 import settings
 
 
+def _extract_body(html: str) -> str:
+    """Extract body content for Confluence storage format. Removes <head>/<style>/<script>."""
+    import re
+    # Remove <html>, <head>, <body> wrapper tags but keep body content
+    body_match = re.search(r'<body[^>]*>(.*?)</body>', html, re.DOTALL)
+    if body_match:
+        html = body_match.group(1)
+    # Remove style blocks
+    html = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL)
+    # Remove script blocks
+    html = re.sub(r'<script[^>]*>.*?</script>', '', html, flags=re.DOTALL)
+    return html.strip()
+
+
 class ConfluenceConfigurationError(Exception):
     pass
 
@@ -75,7 +89,7 @@ class ConfluenceClient:
                 "title": title,
                 "space": {"key": space},
                 "body": {
-                    "storage": {"value": storage_html, "representation": "storage"}
+                    "storage": {"value": _extract_body(storage_html), "representation": "storage"}
                 },
             }
             if parent_page_id:
