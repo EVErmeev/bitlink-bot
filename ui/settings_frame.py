@@ -193,7 +193,7 @@ class SettingsFrame(ttk.Frame):
     def _default_provider(self, check_id):
         defaults = {
             "bitlink": "mock",
-            "transcription": "mock",
+            "transcription": "onebit_newton_cli",
             "confluence": "rest",
             "telegram": "mock",
         }
@@ -604,7 +604,7 @@ class SettingsFrame(ttk.Frame):
         frame.pack(fill=tk.X, padx=10, pady=5)
 
         ttk.Label(frame, text="Провайдер:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self._transcription_provider_var = tk.StringVar(value="mock")
+        self._transcription_provider_var = tk.StringVar(value="onebit_newton_cli")
         provider_combo = ttk.Combobox(frame, textvariable=self._transcription_provider_var,
                                       state="readonly", width=25)
         provider_combo["values"] = ["disabled", "mock", "onebit_newton_cli"]
@@ -628,30 +628,22 @@ class SettingsFrame(ttk.Frame):
     def _test_transcription(self):
         provider = self._transcription_provider_var.get()
         if provider == "disabled":
-            result = ConnectionCheckResult(
-                service_id="transcription", provider="disabled", status="SKIPPED",
-                stage="provider_check", safe_message="Сервис отключён")
-            self._transcription_status_label.configure(text="DISABLED", foreground="gray")
-            self._last_results["transcription"] = result
+            result = ConnectionCheckResult(service_id="transcription", provider="disabled", status="SKIPPED", stage="provider_check", safe_message="Сервис отключён")
+            self._update_transcription_status(result)
             return result
         if provider == "mock":
             result = make_mock_result("transcription")
-            self._transcription_status_label.configure(text="DEMO / MOCK", foreground="#cc6600")
-            self._last_results["transcription"] = result
+            self._update_transcription_status(result)
             return result
 
         snap = self._snapshot_newton()
         if not snap.token:
             result = make_not_configured_result("transcription", ["Токен"])
-            self._transcription_status_label.configure(
-                text="Токен не указан (в блоке БИТ Ньютон CLI)", foreground="red")
-            self._last_results["transcription"] = result
+            self._update_transcription_status(result)
             return result
         if not snap.cli_path:
             result = make_not_configured_result("transcription", ["CLI path"])
-            self._transcription_status_label.configure(
-                text="CLI path не указан (в блоке БИТ Ньютон CLI)", foreground="red")
-            self._last_results["transcription"] = result
+            self._update_transcription_status(result)
             return result
 
         self._transcription_status_label.configure(text="Проверка...", foreground="blue")
@@ -659,37 +651,32 @@ class SettingsFrame(ttk.Frame):
         def worker_fn():
             from services.llm_providers import OneBitNewtonTranscriptionProvider
             from services.runtime_config import OneBitNewtonConfig
-            cfg = OneBitNewtonConfig(
-                token=snap.token, cli_path=snap.cli_path,
-                transport="native", timeout_seconds=snap.timeout_seconds,
-                output_encoding=snap.output_encoding)
+            cfg = OneBitNewtonConfig(token=snap.token, cli_path=snap.cli_path, transport="native", timeout_seconds=snap.timeout_seconds)
             p = OneBitNewtonTranscriptionProvider(config=cfg)
             conn = p.check_connection()
-            self._run_on_ui(lambda c=conn: self._on_transcription_result(c))
-            return ConnectionCheckResult(
-                service_id="transcription", provider="onebit_newton_cli",
-                status="PASS" if conn.ok else "FAIL",
-                stage=conn.stage,
-                safe_message=conn.safe_message[:200])
+            return ConnectionCheckResult(service_id="transcription", provider="onebit_newton_cli", status="PASS" if conn.ok else "FAIL", stage=conn.stage, safe_message=conn.safe_message[:200])
 
-        def on_complete(_chk_id, result):
-            pass
+        def on_complete(check_id, result):
+            self._update_transcription_status(result)
 
         self._runner.start_check("transcription", worker_fn, on_complete)
         return make_mock_result("transcription")
 
-    def _on_transcription_result(self, conn):
-        if conn.ok:
-            self._transcription_status_label.configure(
-                text=conn.safe_message[:200], foreground="green")
+    def _update_transcription_status(self, result):
+        self._last_results["transcription"] = result
+        if result.status == "PASS":
+            self._transcription_status_label.configure(text=result.safe_message[:120], foreground="green")
+        elif result.status == "MOCK":
+            self._transcription_status_label.configure(text="DEMO / MOCK", foreground="#cc6600")
+        elif result.status == "FAIL":
+            self._transcription_status_label.configure(text=result.safe_message[:120], foreground="red")
         else:
-            self._transcription_status_label.configure(
-                text=conn.safe_message[:200], foreground="red")
+            self._transcription_status_label.configure(text=result.status, foreground="gray")
 
     # ── LLM block ──
 
     def _build_llm_block(self):
-        frame = ttk.LabelFrame(self.scrollable, text="Нейросеть / LLM", padding=10)
+        frame = ttk.LabelFrame(self.scrollable, text="Генерация протокола / LLM", padding=10)
         frame.pack(fill=tk.X, padx=10, pady=5)
 
         ttk.Label(frame, text="Провайдер:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -698,10 +685,6 @@ class SettingsFrame(ttk.Frame):
         provider_combo["values"] = ["mock", "onebit_newton_cli", "openai_compatible"]
         provider_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         provider_combo.bind("<<ComboboxSelected>>", self._on_llm_provider_change)
-
-        ttk.Label(frame, text="Статус:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self._llm_status_label = ttk.Label(frame, text="Не проверено", foreground="gray")
-        self._llm_status_label.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
 
         # Sub-panels
         self._onebit_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
@@ -724,15 +707,23 @@ class SettingsFrame(ttk.Frame):
     def _build_onebit_panel(self):
         p = self._onebit_panel
 
-        ttk.Label(p, text="Модель:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Label(p, text="Токен и путь CLI настраиваются в блоке «БИТ Ньютон CLI» выше.",
+                  foreground="gray", font=("Segoe UI", 8, "italic")).pack(anchor=tk.W, pady=(0, 5))
+
+        ttk.Label(p, text="Модель:").pack(anchor=tk.W, pady=2)
         self._llm_onebit_model_var = tk.StringVar(value="gpt4")
         model_combo = ttk.Combobox(p, textvariable=self._llm_onebit_model_var, state="readonly", width=15)
         model_combo["values"] = ["llama", "gpt4"]
-        model_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        model_combo.pack(anchor=tk.W, padx=5, pady=2)
 
-        ttk.Label(p, text="Токен и путь CLI настраиваются в блоке «БИТ Ньютон CLI» выше.",
-                  foreground="gray", wraplength=400).grid(
-            row=1, column=0, columnspan=3, sticky=tk.W, pady=5)
+        self._llm_status_label = ttk.Label(p, text="Не проверено", foreground="gray")
+        self._llm_status_label.pack(anchor=tk.W, pady=2)
+
+        btn_frame = ttk.Frame(p)
+        btn_frame.pack(anchor=tk.W, pady=5)
+        self._llm_check_btn = ttk.Button(btn_frame, text="Проверить LLM",
+            command=lambda: self._check_cli_token_and_llm())
+        self._llm_check_btn.pack(side=tk.LEFT, padx=3)
 
     def _build_openai_panel(self):
         p = self._openai_panel
@@ -1220,7 +1211,7 @@ class SettingsFrame(ttk.Frame):
             ("transcription", "Транскрибация", self._check_transcription_for_all),
             ("confluence", "Confluence", self._check_confluence_impl),
             ("telegram", "Telegram", self._check_telegram_impl),
-            ("llm", "Нейросеть / LLM", self._check_llm_impl),
+            ("llm", "Генерация протокола / LLM", self._check_llm_impl),
         ]
 
         def runner():
@@ -1294,11 +1285,37 @@ class SettingsFrame(ttk.Frame):
 
     def _check_transcription_for_all(self):
         provider = self._transcription_provider_var.get()
-        if provider in ("disabled", "mock"):
-            return make_mock_result("transcription") if provider == "mock" else ConnectionCheckResult(
+        if provider == "disabled":
+            return ConnectionCheckResult(
                 service_id="transcription", provider="disabled", status="SKIPPED",
                 stage="provider_check", safe_message="Сервис отключён")
-        return make_mock_result("transcription")
+        if provider == "mock":
+            return make_mock_result("transcription")
+
+        snap = self._snapshot_newton()
+        if not snap.token:
+            return make_not_configured_result("transcription", ["Токен"])
+        if not snap.cli_path:
+            return make_not_configured_result("transcription", ["CLI path"])
+
+        from services.process_runner import run_process
+        path = snap.cli_path
+        if path.endswith(".cmd") or path.endswith(".bat"):
+            args = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", path, "transcribe", "--help"]
+        else:
+            args = [path, "transcribe", "--help"]
+        result = run_process(args, timeout_seconds=snap.timeout_seconds)
+        if result.returncode == 0:
+            return ConnectionCheckResult(
+                service_id="transcription", provider="onebit_newton_cli",
+                status="PASS", stage="transcribe_help",
+                safe_message="Transcription CLI доступен (transcribe --help OK)")
+        else:
+            return ConnectionCheckResult(
+                service_id="transcription", provider="onebit_newton_cli",
+                status="FAIL", stage="transcribe_help",
+                safe_message=f"CLI exit {result.returncode}: {result.stderr[:100]}",
+                exit_code=result.returncode)
 
     def _copy_report(self, tree):
         lines = ["=== Отчёт о проверке подключений ==="]
@@ -1375,7 +1392,7 @@ class SettingsFrame(ttk.Frame):
 
         # Transcription
         self._transcription_provider_var.set(
-            os.getenv("TRANSCRIPTION_PROVIDER", "mock"))
+            os.getenv("TRANSCRIPTION_PROVIDER", "onebit_newton_cli"))
         self._transcription_engine_var.set(os.getenv("TRANSCRIPTION_ENGINE", "v3"))
 
         # LLM block

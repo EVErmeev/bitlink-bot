@@ -17,7 +17,7 @@ def build_transcription_client(config: RuntimeConfig):
     if config.transcription_provider == "disabled":
         raise ValueError("Transcription disabled - cannot transcribe")
     if config.transcription_provider == "onebit_newton_cli":
-        raise ValueError("Transcription via Newton CLI not yet integrated into TranscriptionClient")
+        return TranscriptionClient()
     raise ValueError(f"Unknown transcription_provider: {config.transcription_provider}")
 
 
