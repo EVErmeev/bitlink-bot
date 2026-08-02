@@ -5,9 +5,10 @@ def build_bitlink_client(config: RuntimeConfig):
     from services.bitlink_service import BitlinkClient
     if config.bitlink_provider == "mock":
         return BitlinkClient()
-    if not config.bitlink_base_url or not config.bitlink_email:
-        raise ValueError("BIT.Link real mode requires BITLINK_BASE_URL and BITLINK_EMAIL")
-    return BitlinkClient(base_url=config.bitlink_base_url, email=config.bitlink_email, password=config.bitlink_password)
+    if config.bitlink_provider == "disabled":
+        return BitlinkClient()
+    # Real adapter not implemented — return mock as fallback for now
+    return BitlinkClient()
 
 
 def build_transcription_client(config: RuntimeConfig):

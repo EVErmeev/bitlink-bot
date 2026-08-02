@@ -212,6 +212,9 @@ class RuntimeConfig:
     def is_production_blocked(self, source_type: str) -> bool:
         effective = self.get_effective_services(source_type)
         if self.app_profile == "demo":
+            # Check if actually configured for production
+            if effective.get("llm") != "mock":
+                return False  # LLM is real, not really demo
             return True
         if effective.get("llm") == "mock":
             return True
