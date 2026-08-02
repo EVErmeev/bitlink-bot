@@ -6,7 +6,13 @@ from pathlib import Path
 import requests
 
 from models.batch import BatchItem
-from models.protocol import Protocol
+from models.protocol import (
+    DecisionItem,
+    Protocol,
+    QuestionItem,
+    RiskItem,
+    TaskItem,
+)
 
 try:
     import settings
@@ -140,6 +146,52 @@ class ProcessingService:
 
             protocol = template.assemble_from_llm_json(protocol, atomic_items, llm_data,
                 {"date": meeting_date, "time": meeting_time, "item": item})
+
+            # Register extraction pass — extract decisions/questions/risks/tasks
+            from services.protocol_register_extractor import extract_protocol_registers
+            registers = extract_protocol_registers(transcript_text, protocol.topic_blocks, protocol.participants, self.llm)
+
+            # Merge registers into protocol (priority: extractor > LLM > atomic)
+            for d in registers.get("decisions", []):
+                if isinstance(d, dict) and d.get("decision_text"):
+                    protocol.decisions.append(DecisionItem(
+                        decision_id=str(uuid.uuid4())[:8], source_context_id=source_ctx_id,
+                        decision_text=d.get("decision_text", ""),
+                        context_and_basis=d.get("context_and_basis", ""),
+                        responsible=d.get("responsible", ""), deadline=d.get("deadline", ""),
+                        related_topic=d.get("related_topic", ""),
+                        explicit_agreement=True, confidence=0.7,
+                        evidence=d.get("evidence", ""),
+                    ))
+
+            for q in registers.get("questions", []):
+                if isinstance(q, dict) and q.get("question_text"):
+                    protocol.questions.append(QuestionItem(
+                        question_id=str(uuid.uuid4())[:8], source_context_id=source_ctx_id,
+                        question_text=q.get("question_text", ""),
+                        context=q.get("context", ""), to_determine=q.get("to_determine", ""),
+                        status=q.get("status", "Открыт"), related_topic=q.get("related_topic", ""),
+                    ))
+
+            for r in registers.get("risks", []):
+                if isinstance(r, dict) and r.get("risk_text"):
+                    protocol.risks.append(RiskItem(
+                        risk_id=str(uuid.uuid4())[:8], source_context_id=source_ctx_id,
+                        risk_text=r.get("risk_text", ""),
+                        risk_type=r.get("risk_type", "Риск"),
+                        reason=r.get("reason", ""), impact=r.get("impact", ""),
+                        status="Активен", related_topic=r.get("related_topic", ""),
+                    ))
+
+            for t in registers.get("tasks", []):
+                if isinstance(t, dict) and t.get("task_text"):
+                    protocol.tasks.append(TaskItem(
+                        task_id=str(uuid.uuid4())[:8], source_context_id=source_ctx_id,
+                        task_text=t.get("task_text", ""),
+                        basis=t.get("basis", ""), responsible=t.get("responsible", ""),
+                        deadline=t.get("deadline", ""), related_topic=t.get("related_topic", ""),
+                        commitment_confirmed=True,
+                    ))
 
             protocol.client_name = item.client_name
             protocol.project_name = item.project_name

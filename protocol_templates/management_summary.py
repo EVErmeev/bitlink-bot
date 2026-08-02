@@ -1,3 +1,4 @@
+import html as html_mod
 import json
 import re
 import uuid
@@ -13,6 +14,7 @@ from models.protocol import (
 )
 from models.validation import ValidationReport, ValidationStatus
 from protocol_templates.base import BaseProtocolTemplate
+from services.protocol_content_utils import normalize_text_list
 
 
 class ManagementSummaryTemplate(BaseProtocolTemplate):
@@ -368,7 +370,16 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
 
         kr = llm_data.get("key_results", [])
         if kr:
-            protocol.key_outcomes = json.dumps(kr, ensure_ascii=False)
+            if isinstance(kr, list):
+                outcome_items = []
+                for item in kr:
+                    if isinstance(item, dict):
+                        outcome_items.append(item.get("text", item.get("result", str(item))))
+                    elif isinstance(item, str):
+                        outcome_items.append(item)
+                protocol.key_outcomes = "\n".join(outcome_items) if outcome_items else json.dumps(kr, ensure_ascii=False)
+            else:
+                protocol.key_outcomes = str(kr)
 
         for d in llm_data.get("decisions", []):
             if isinstance(d, dict):
@@ -401,7 +412,21 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
 
         cp = llm_data.get("control_points", llm_data.get("next_control_points", []))
         if cp:
-            protocol.control_points = json.dumps(cp, ensure_ascii=False) if isinstance(cp, list) else str(cp)
+            if isinstance(cp, list):
+                cp_items = []
+                for i, item in enumerate(cp, 1):
+                    if isinstance(item, dict):
+                        label = item.get("label", item.get("point", item.get("name", str(item))))
+                        date_val = item.get("date", item.get("deadline", ""))
+                        if date_val:
+                            cp_items.append(f"{i}. {label} — {date_val}")
+                        else:
+                            cp_items.append(f"{i}. {label}")
+                    elif isinstance(item, str):
+                        cp_items.append(f"{i}. {item}")
+                protocol.control_points = "\n".join(cp_items) if cp_items else str(cp)
+            else:
+                protocol.control_points = str(cp)
 
         return protocol
 
@@ -630,6 +655,27 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
 
         return report
 
+    def _render_control_points_html(self, control_points_value) -> str:
+        """Render control points as a proper HTML list or table."""
+        if not control_points_value:
+            return '<p>—</p>'
+        items = normalize_text_list(control_points_value)
+        if not items:
+            return '<p>—</p>'
+        # Check if items have structured data (date fields)
+        has_dates = any("—" in item or ":" in item for item in items)
+        if has_dates:
+            html_out = '<ul>'
+            for item in items:
+                html_out += f'<li>{html_mod.escape(item)}</li>'
+            html_out += '</ul>'
+            return html_out
+        html_out = '<ol>'
+        for item in items:
+            html_out += f'<li>{html_mod.escape(item)}</li>'
+        html_out += '</ol>'
+        return html_out
+
     # ── render_html ──────────────────────────────────────────────────────
 
     def render_html(self, protocol: Protocol) -> str:
@@ -669,7 +715,10 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
         participants_list = ""
         if protocol.participants:
             participants_list = "<ul>" + "".join(
-                f"<li>{p.get('name', '—')} — {p.get('role', '—')}</li>"
+                "<li>{} — {}</li>".format(
+                    html_mod.escape(p.get('name', '—')),
+                    html_mod.escape(p.get('role') or p.get('position') or p.get('job_title') or '—'),
+                )
                 for p in protocol.participants
             ) + "</ul>"
 
@@ -811,7 +860,7 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
 </table>
 
 <h2>{self.SECTION_NAMES['control_points']}</h2>
-<div>{protocol.control_points.replace(chr(10), '<br>') if protocol.control_points else '<p>—</p>'}</div>
+{self._render_control_points_html(protocol.control_points)}
 
 <div class="footer">Протокол сгенерирован автоматически. Версия шаблона: {self.template_id} v{self.version}</div>
 </body>

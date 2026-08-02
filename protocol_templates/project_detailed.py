@@ -14,6 +14,7 @@ from models.protocol import (
 )
 from models.validation import ValidationReport, ValidationStatus
 from protocol_templates.base import BaseProtocolTemplate
+from services.protocol_content_utils import normalize_paragraphs, normalize_text_list
 
 
 class ProjectDetailedTemplate(BaseProtocolTemplate):
@@ -1088,7 +1089,9 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         participants_rows = ""
         for i, p in enumerate(protocol.participants, 1):
             name = p.get("name", "—") if isinstance(p, dict) else str(p)
-            role = p.get("role", "—") if isinstance(p, dict) else "—"
+            role = "—"
+            if isinstance(p, dict):
+                role = p.get("role") or p.get("position") or p.get("job_title") or "—"
             participants_rows += f"<tr><td>{i}</td><td>{html_mod.escape(name)}</td><td>{html_mod.escape(role)}</td></tr>\n"
 
         topic_rows = ""
@@ -1096,10 +1099,10 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
             status_str = self._build_status_string(tb)
             discussion_parts = ""
             if tb.discussion_content:
-                for line in tb.discussion_content.split("\n"):
-                    stripped = line.strip()
-                    if stripped:
-                        discussion_parts += f"<p>{html_mod.escape(stripped)}</p>"
+                paragraphs = normalize_paragraphs(tb.discussion_content)
+                for para in paragraphs:
+                    if para.strip():
+                        discussion_parts += f"<p>{html_mod.escape(para.strip())}</p>"
             if not discussion_parts:
                 discussion_parts = "—"
             conclusion = tb.conclusion.replace(chr(10), "<br>") if tb.conclusion else "—"
@@ -1177,11 +1180,9 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
         key_outcomes_html = ""
         if protocol.key_outcomes:
-            outcomes = protocol.key_outcomes
-            if isinstance(outcomes, str):
-                outcomes = [outcomes]
+            outcomes = normalize_text_list(protocol.key_outcomes)
             key_outcomes_html += "<ul>"
-            for o in outcomes if isinstance(outcomes, list) else [outcomes]:
+            for o in outcomes:
                 key_outcomes_html += f"<li>{html_mod.escape(str(o))}</li>"
             key_outcomes_html += "</ul>"
 
@@ -1414,6 +1415,7 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 <p class="header-meta"><strong>Дата встречи:</strong> {date_str} | <strong>Время:</strong> {time_str}</p>
 <p><strong>Название протокола:</strong> {title_safe}</p>
 {meeting_context_html or '<p>—</p>'}
+<p><strong>Клиент:</strong> {html_mod.escape(protocol.client_name or '—')} | <strong>Проект:</strong> {html_mod.escape(protocol.project_name or '—')}</p>
 
 <h2>{self.SECTION_NAMES['participants']}</h2>
 <table>
