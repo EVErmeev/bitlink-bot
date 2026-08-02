@@ -1,3 +1,4 @@
+import html as html_mod
 import re
 import uuid
 from datetime import date
@@ -471,12 +472,16 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
     def assemble_from_llm_json(self, protocol: Protocol, atomic_items: list,
                                 llm_data: dict, meeting_metadata: dict) -> Protocol:
-        # ── general_info ────────────────────────────────────
+        llm_title = ""
+        if "protocol_title" in llm_data:
+            llm_title = str(llm_data.get("protocol_title", "")).strip()
+        elif "general_info" in llm_data:
+            llm_title = str(llm_data.get("general_info", {}).get("protocol_title", "")).strip()
+        if llm_title and len(llm_title) < 120:
+            protocol.protocol_title = llm_title
+
         general_info = llm_data.get("general_info", {})
         if isinstance(general_info, dict):
-            gi_title = general_info.get("protocol_title")
-            if gi_title:
-                protocol.protocol_title = gi_title
             gi_date = general_info.get("meeting_date")
             if gi_date and isinstance(gi_date, str):
                 try:
@@ -1076,26 +1081,34 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
     # ── render_html ──────────────────────────────────────────────────────
 
     def render_html(self, protocol: Protocol) -> str:
-        date_str = protocol.meeting_date.isoformat() if protocol.meeting_date else "—"
-        time_str = protocol.meeting_time.strftime("%H:%M") if protocol.meeting_time else "—"
+        date_str = html_mod.escape(str(protocol.meeting_date) if protocol.meeting_date else "—")
+        time_str = html_mod.escape(protocol.meeting_time.strftime("%H:%M") if protocol.meeting_time else "—")
+        title_safe = html_mod.escape(protocol.protocol_title or "—")
 
         participants_rows = ""
         for i, p in enumerate(protocol.participants, 1):
             name = p.get("name", "—") if isinstance(p, dict) else str(p)
             role = p.get("role", "—") if isinstance(p, dict) else "—"
-            participants_rows += f"<tr><td>{i}</td><td>{name}</td><td>{role}</td></tr>\n"
+            participants_rows += f"<tr><td>{i}</td><td>{html_mod.escape(name)}</td><td>{html_mod.escape(role)}</td></tr>\n"
 
         topic_rows = ""
         for i, tb in enumerate(protocol.topic_blocks, 1):
             status_str = self._build_status_string(tb)
-            discussion = tb.discussion_content.replace(chr(10), "<br>") if tb.discussion_content else "—"
+            discussion_parts = ""
+            if tb.discussion_content:
+                for line in tb.discussion_content.split("\n"):
+                    stripped = line.strip()
+                    if stripped:
+                        discussion_parts += f"<p>{html_mod.escape(stripped)}</p>"
+            if not discussion_parts:
+                discussion_parts = "—"
             conclusion = tb.conclusion.replace(chr(10), "<br>") if tb.conclusion else "—"
             topic_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td class=\"topic-title\">{tb.title or '—'}</td>
-<td class=\"discussion\">{discussion}</td>
-<td class=\"conclusion\">{conclusion}</td>
-<td class=\"status\">{status_str}</td>
+<td class=\"topic-title\">{html_mod.escape(tb.title) or '—'}</td>
+<td class=\"discussion\">{discussion_parts}</td>
+<td class=\"conclusion\">{html_mod.escape(conclusion)}</td>
+<td class=\"status\">{html_mod.escape(status_str)}</td>
 </tr>
 """
 
@@ -1103,13 +1116,13 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, d in enumerate(protocol.decisions, 1):
             decisions_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{d.decision_text or '—'}</td>
-<td>{d.context_and_basis or '—'}</td>
-<td>{d.agreed_scope or '—'}</td>
-<td>{d.boundaries or '—'}</td>
-<td>{d.responsible or '—'}</td>
-<td>{d.deadline or '—'}</td>
-<td>{d.related_topic or '—'}</td>
+<td>{html_mod.escape(d.decision_text or '—')}</td>
+<td>{html_mod.escape(d.context_and_basis or '—')}</td>
+<td>{html_mod.escape(d.agreed_scope or '—')}</td>
+<td>{html_mod.escape(d.boundaries or '—')}</td>
+<td>{html_mod.escape(d.responsible or '—')}</td>
+<td>{html_mod.escape(d.deadline or '—')}</td>
+<td>{html_mod.escape(d.related_topic or '—')}</td>
 </tr>
 """
 
@@ -1117,15 +1130,15 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, q in enumerate(protocol.questions, 1):
             questions_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{q.question_text or '—'}</td>
-<td>{q.context or '—'}</td>
-<td>{q.known_info or '—'}</td>
-<td>{q.to_determine or '—'}</td>
-<td>{q.responsible or '—'}</td>
-<td>{q.deadline or '—'}</td>
-<td>{q.next_action or '—'}</td>
-<td>{q.status or '—'}</td>
-<td>{q.related_topic or '—'}</td>
+<td>{html_mod.escape(q.question_text or '—')}</td>
+<td>{html_mod.escape(q.context or '—')}</td>
+<td>{html_mod.escape(q.known_info or '—')}</td>
+<td>{html_mod.escape(q.to_determine or '—')}</td>
+<td>{html_mod.escape(q.responsible or '—')}</td>
+<td>{html_mod.escape(q.deadline or '—')}</td>
+<td>{html_mod.escape(q.next_action or '—')}</td>
+<td>{html_mod.escape(q.status or '—')}</td>
+<td>{html_mod.escape(q.related_topic or '—')}</td>
 </tr>
 """
 
@@ -1133,16 +1146,16 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, r in enumerate(protocol.risks, 1):
             risks_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{r.risk_type or '—'}</td>
-<td>{r.risk_text or '—'}</td>
-<td>{r.reason or '—'}</td>
-<td>{r.impact or '—'}</td>
-<td>{r.trigger_condition or '—'}</td>
-<td>{r.measures or '—'}</td>
-<td>{r.responsible or '—'}</td>
-<td>{r.deadline or '—'}</td>
-<td>{r.status or '—'}</td>
-<td>{r.related_topic or '—'}</td>
+<td>{html_mod.escape(r.risk_type or '—')}</td>
+<td>{html_mod.escape(r.risk_text or '—')}</td>
+<td>{html_mod.escape(r.reason or '—')}</td>
+<td>{html_mod.escape(r.impact or '—')}</td>
+<td>{html_mod.escape(r.trigger_condition or '—')}</td>
+<td>{html_mod.escape(r.measures or '—')}</td>
+<td>{html_mod.escape(r.responsible or '—')}</td>
+<td>{html_mod.escape(r.deadline or '—')}</td>
+<td>{html_mod.escape(r.status or '—')}</td>
+<td>{html_mod.escape(r.related_topic or '—')}</td>
 </tr>
 """
 
@@ -1150,24 +1163,141 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, t in enumerate(protocol.tasks, 1):
             tasks_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{t.task_text or '—'}</td>
-<td>{t.basis or '—'}</td>
-<td>{t.expected_result or '—'}</td>
-<td>{t.responsible or '—'}</td>
-<td>{t.co_executors or '—'}</td>
-<td>{t.deadline or '—'}</td>
-<td>{t.dependencies or '—'}</td>
-<td>{t.status or '—'}</td>
-<td>{t.related_topic or '—'}</td>
+<td>{html_mod.escape(t.task_text or '—')}</td>
+<td>{html_mod.escape(t.basis or '—')}</td>
+<td>{html_mod.escape(t.expected_result or '—')}</td>
+<td>{html_mod.escape(t.responsible or '—')}</td>
+<td>{html_mod.escape(t.co_executors or '—')}</td>
+<td>{html_mod.escape(t.deadline or '—')}</td>
+<td>{html_mod.escape(t.dependencies or '—')}</td>
+<td>{html_mod.escape(t.status or '—')}</td>
+<td>{html_mod.escape(t.related_topic or '—')}</td>
 </tr>
 """
+
+        key_outcomes_html = ""
+        if protocol.key_outcomes:
+            outcomes = protocol.key_outcomes
+            if isinstance(outcomes, str):
+                outcomes = [outcomes]
+            key_outcomes_html += "<ul>"
+            for o in outcomes if isinstance(outcomes, list) else [outcomes]:
+                key_outcomes_html += f"<li>{html_mod.escape(str(o))}</li>"
+            key_outcomes_html += "</ul>"
+
+        current_state_html = ""
+        if hasattr(protocol, 'current_state') and protocol.current_state:
+            cs = protocol.current_state
+            if isinstance(cs, list) and len(cs) > 0 and isinstance(cs[0], dict):
+                current_state_html += "<table>"
+                current_state_html += "<tr><th>Объект / процесс</th><th>Текущее состояние</th></tr>"
+                for item in cs:
+                    current_state_html += f"<tr><td>{html_mod.escape(str(item.get('object','')))}</td><td>{html_mod.escape(str(item.get('state','')))}</td></tr>"
+                current_state_html += "</table>"
+            elif cs:
+                current_state_html += f"<p>{html_mod.escape(str(cs))}</p>"
+
+        decisions_table = ""
+        if protocol.decisions:
+            decisions_table = f"""<table>
+<thead>
+<tr>
+    <th>№</th>
+    <th>Решение</th>
+    <th>Контекст и основание</th>
+    <th>Что согласовано</th>
+    <th>Границы решения</th>
+    <th>Ответственные / участники</th>
+    <th>Срок</th>
+    <th>Связанная тема</th>
+</tr>
+</thead>
+<tbody>
+{decisions_rows}
+</tbody>
+</table>"""
+
+        questions_table = ""
+        if protocol.questions:
+            questions_table = f"""<table>
+<thead>
+<tr>
+    <th>№</th>
+    <th>Вопрос</th>
+    <th>Контекст</th>
+    <th>Что известно</th>
+    <th>Что определить / получить</th>
+    <th>Ответственный</th>
+    <th>Срок</th>
+    <th>Следующее действие</th>
+    <th>Статус</th>
+    <th>Связанная тема</th>
+</tr>
+</thead>
+<tbody>
+{questions_rows}
+</tbody>
+</table>"""
+
+        risks_table = ""
+        if protocol.risks:
+            risks_table = f"""<table>
+<thead>
+<tr>
+    <th>№</th>
+    <th>Тип</th>
+    <th>Риск / ограничение</th>
+    <th>Причина</th>
+    <th>Влияние</th>
+    <th>Условие проявления</th>
+    <th>Меры</th>
+    <th>Ответственный</th>
+    <th>Срок</th>
+    <th>Статус</th>
+    <th>Связанная тема</th>
+</tr>
+</thead>
+<tbody>
+{risks_rows}
+</tbody>
+</table>"""
+
+        tasks_table = ""
+        if protocol.tasks:
+            tasks_table = f"""<table>
+<thead>
+<tr>
+    <th>№</th>
+    <th>Задача</th>
+    <th>Основание</th>
+    <th>Ожидаемый результат</th>
+    <th>Ответственный</th>
+    <th>Соисполнители</th>
+    <th>Срок</th>
+    <th>Зависимости</th>
+    <th>Статус</th>
+    <th>Связанная тема</th>
+</tr>
+</thead>
+<tbody>
+{tasks_rows}
+</tbody>
+</table>"""
+
+        meeting_context_html = ""
+        if protocol.meeting_context:
+            meeting_context_html = f"<div class=\"section-content\">{html_mod.escape(protocol.meeting_context)}</div>"
+
+        meeting_purpose_html = ""
+        if protocol.meeting_purpose:
+            meeting_purpose_html = f"<div class=\"section-content\">{html_mod.escape(protocol.meeting_purpose)}</div>"
 
         html = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Подробный проектный протокол — {protocol.protocol_title or 'Встреча'}</title>
+<title>Подробный проектный протокол — {title_safe}</title>
 <style>
     * {{ box-sizing: border-box; }}
     body {{
@@ -1282,8 +1412,8 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
 <h1>{self.SECTION_NAMES['general_info']}</h1>
 <p class="header-meta"><strong>Дата встречи:</strong> {date_str} | <strong>Время:</strong> {time_str}</p>
-<p><strong>Название протокола:</strong> {protocol.protocol_title or '—'}</p>
-<div class="section-content">{protocol.meeting_context.replace(chr(10), '<br>') if protocol.meeting_context else '<p>—</p>'}</div>
+<p><strong>Название протокола:</strong> {title_safe}</p>
+{meeting_context_html or '<p>—</p>'}
 
 <h2>{self.SECTION_NAMES['participants']}</h2>
 <table>
@@ -1297,12 +1427,12 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
 <h2>{self.SECTION_NAMES['purpose_and_context']}</h2>
 <h3>Цель встречи</h3>
-<div class="section-content">{protocol.meeting_purpose.replace(chr(10), '<br>') if protocol.meeting_purpose else '<p>—</p>'}</div>
+{meeting_purpose_html or '<p>—</p>'}
 <h3>Исходный контекст</h3>
-<div class="section-content">{protocol.meeting_context.replace(chr(10), '<br>') if protocol.meeting_context else '<p>—</p>'}</div>
+{meeting_context_html or '<p>—</p>'}
 
 <h2>{self.SECTION_NAMES['key_outcomes']}</h2>
-<div class="section-content">{protocol.key_outcomes.replace(chr(10), '<br>') if protocol.key_outcomes else '<p>—</p>'}</div>
+{key_outcomes_html or '<p>—</p>'}
 
 <h2>{self.SECTION_NAMES['topic_blocks']}</h2>
 <table class="topic-table">
@@ -1321,90 +1451,19 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 </table>
 
 <h2>{self.SECTION_NAMES['current_state']}</h2>
-<div class="section-content">{protocol.current_state.replace(chr(10), '<br>') if protocol.current_state else '<p>—</p>'}</div>
+{current_state_html or '<p>—</p>'}
 
 <h2>{self.SECTION_NAMES['decisions']}</h2>
-<table>
-<thead>
-<tr>
-    <th>№</th>
-    <th>Решение</th>
-    <th>Контекст и основание</th>
-    <th>Что согласовано</th>
-    <th>Границы решения</th>
-    <th>Ответственные / участники</th>
-    <th>Срок</th>
-    <th>Связанная тема</th>
-</tr>
-</thead>
-<tbody>
-{decisions_rows or '<tr><td colspan="8">Решения отсутствуют</td></tr>'}
-</tbody>
-</table>
+{decisions_table or '<p>Решения отсутствуют</p>'}
 
 <h2>{self.SECTION_NAMES['questions']}</h2>
-<table>
-<thead>
-<tr>
-    <th>№</th>
-    <th>Вопрос</th>
-    <th>Контекст</th>
-    <th>Что известно</th>
-    <th>Что определить / получить</th>
-    <th>Ответственный</th>
-    <th>Срок</th>
-    <th>Следующее действие</th>
-    <th>Статус</th>
-    <th>Связанная тема</th>
-</tr>
-</thead>
-<tbody>
-{questions_rows or '<tr><td colspan="10">Вопросы отсутствуют</td></tr>'}
-</tbody>
-</table>
+{questions_table or '<p>Вопросы отсутствуют</p>'}
 
 <h2>{self.SECTION_NAMES['risks']}</h2>
-<table>
-<thead>
-<tr>
-    <th>№</th>
-    <th>Тип</th>
-    <th>Риск / ограничение</th>
-    <th>Причина</th>
-    <th>Влияние</th>
-    <th>Условие проявления</th>
-    <th>Меры</th>
-    <th>Ответственный</th>
-    <th>Срок</th>
-    <th>Статус</th>
-    <th>Связанная тема</th>
-</tr>
-</thead>
-<tbody>
-{risks_rows or '<tr><td colspan="11">Риски отсутствуют</td></tr>'}
-</tbody>
-</table>
+{risks_table or '<p>Риски отсутствуют</p>'}
 
 <h2>{self.SECTION_NAMES['tasks']}</h2>
-<table>
-<thead>
-<tr>
-    <th>№</th>
-    <th>Задача</th>
-    <th>Основание</th>
-    <th>Ожидаемый результат</th>
-    <th>Ответственный</th>
-    <th>Соисполнители</th>
-    <th>Срок</th>
-    <th>Зависимости</th>
-    <th>Статус</th>
-    <th>Связанная тема</th>
-</tr>
-</thead>
-<tbody>
-{tasks_rows or '<tr><td colspan="10">Задачи отсутствуют</td></tr>'}
-</tbody>
-</table>
+{tasks_table or '<p>Задачи отсутствуют</p>'}
 
 <div class="footer">Протокол сгенерирован автоматически. Шаблон: {self.template_id} v{self.version}</div>
 </body>

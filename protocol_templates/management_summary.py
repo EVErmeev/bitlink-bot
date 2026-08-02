@@ -1,4 +1,6 @@
+import json
 import re
+import uuid
 from datetime import date
 
 from models.protocol import (
@@ -358,40 +360,50 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
 
     def assemble_from_llm_json(self, protocol: Protocol, atomic_items: list,
                                 llm_data: dict, meeting_metadata: dict) -> Protocol:
-        protocol.protocol_title = llm_data.get("protocol_title", protocol.protocol_title or "")
-        protocol.meeting_purpose = llm_data.get("purpose", "")
-        protocol.management_summary = llm_data.get("management_summary", "")
-        protocol.key_outcomes = llm_data.get("key_outcomes", llm_data.get("management_summary", ""))
-        protocol.control_points = llm_data.get("control_points", "")
-        self._fill_items(protocol, atomic_items)
-        return protocol
+        gi = llm_data.get("general_info", {})
+        if gi.get("protocol_title"): protocol.protocol_title = gi["protocol_title"]
 
-    def _fill_items(self, protocol: Protocol, atomic_items: list):
-        if not protocol.decisions:
-            for i, ai in enumerate(a for a in atomic_items if a.item_type == "решение" and a.explicit_agreement):
+        es = llm_data.get("executive_summary", {})
+        protocol.management_summary = es.get("summary", llm_data.get("summary", ""))
+
+        kr = llm_data.get("key_results", [])
+        if kr:
+            protocol.key_outcomes = json.dumps(kr, ensure_ascii=False)
+
+        for d in llm_data.get("decisions", []):
+            if isinstance(d, dict):
                 protocol.decisions.append(DecisionItem(
-                    decision_id=f"d_{i}", source_context_id=ai.source_context_id,
-                    decision_text=ai.text, explicit_agreement=ai.explicit_agreement,
-                    confidence=ai.confidence, evidence=ai.evidence,
+                    decision_id=str(uuid.uuid4())[:8], source_context_id=protocol.source_context_id,
+                    decision_text=d.get("decision_text", d.get("text", d.get("decision", ""))),
+                    responsible=d.get("responsible", ""), deadline=d.get("deadline", ""),
+                    explicit_agreement=d.get("explicit_agreement", False),
+                    confidence=d.get("confidence", 0.5),
+                    evidence=d.get("evidence", ""),
                 ))
-        if not protocol.questions:
-            for i, ai in enumerate(a for a in atomic_items if a.item_type == "вопрос"):
-                protocol.questions.append(QuestionItem(
-                    question_id=f"q_{i}", source_context_id=ai.source_context_id,
-                    question_text=ai.text,
-                ))
-        if not protocol.risks:
-            for i, ai in enumerate(a for a in atomic_items if a.item_type in ("риск", "ограничение", "зависимость")):
+
+        for r in llm_data.get("risks_and_blockers", llm_data.get("critical_gaps_and_risks", [])):
+            if isinstance(r, dict):
                 protocol.risks.append(RiskItem(
-                    risk_id=f"r_{i}", source_context_id=ai.source_context_id,
-                    risk_text=ai.text,
+                    risk_id=str(uuid.uuid4())[:8], source_context_id=protocol.source_context_id,
+                    risk_text=r.get("risk_text", r.get("text", r.get("description", ""))),
+                    risk_type=r.get("risk_type", r.get("type", "Риск")),
+                    status=r.get("status", ""), responsible=r.get("responsible", ""),
                 ))
-        if not protocol.tasks:
-            for i, ai in enumerate(a for a in atomic_items if a.item_type == "задача" and a.commitment_confirmed):
+
+        for t in llm_data.get("tasks", llm_data.get("actions", [])):
+            if isinstance(t, dict):
                 protocol.tasks.append(TaskItem(
-                    task_id=f"t_{i}", source_context_id=ai.source_context_id,
-                    task_text=ai.text, commitment_confirmed=ai.commitment_confirmed,
+                    task_id=str(uuid.uuid4())[:8], source_context_id=protocol.source_context_id,
+                    task_text=t.get("task_text", t.get("text", t.get("action", t.get("description", "")))),
+                    responsible=t.get("responsible", ""), deadline=t.get("deadline", ""),
+                    commitment_confirmed=t.get("commitment_confirmed", False),
                 ))
+
+        cp = llm_data.get("control_points", llm_data.get("next_control_points", []))
+        if cp:
+            protocol.control_points = json.dumps(cp, ensure_ascii=False) if isinstance(cp, list) else str(cp)
+
+        return protocol
 
     # ── assemble_with_llm_output ─────────────────────────────────────────
 

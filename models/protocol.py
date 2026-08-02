@@ -171,6 +171,10 @@ class Protocol:
     # Atomic items used to generate
     atomic_items: list[AtomicItem] = field(default_factory=list)
 
+    # Client/project context
+    client_name: str = ""
+    project_name: str = ""
+
     def to_dict(self) -> dict:
         return {
             "protocol_id": self.protocol_id,
@@ -294,6 +298,8 @@ class Protocol:
             "render_validation_passed": self.render_validation_passed,
             "topic_coverage_passed": self.topic_coverage_passed,
             "topic_alignment_passed": self.topic_alignment_passed,
+            "client_name": self.client_name,
+            "project_name": self.project_name,
         }
 
     @classmethod
@@ -334,6 +340,8 @@ class Protocol:
         p.render_validation_passed = d.get("render_validation_passed", False)
         p.topic_coverage_passed = d.get("topic_coverage_passed", False)
         p.topic_alignment_passed = d.get("topic_alignment_passed", False)
+        p.client_name = d.get("client_name", "")
+        p.project_name = d.get("project_name", "")
 
         for tb in d.get("topic_blocks", []):
             p.topic_blocks.append(TopicBlock(

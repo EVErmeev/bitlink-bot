@@ -141,6 +141,17 @@ class ProcessingService:
             protocol = template.assemble_from_llm_json(protocol, atomic_items, llm_data,
                 {"date": meeting_date, "time": meeting_time, "item": item})
 
+            protocol.client_name = item.client_name
+            protocol.project_name = item.project_name
+
+            date_part = ""
+            if meeting_date:
+                date_part = f" от {meeting_date.strftime('%d.%m.%Y')}"
+            extra = f". {item.client_name} — {item.project_name}" if item.client_name else ""
+            confluence_title = f"Протокол встречи{date_part}{extra}"
+            if protocol.protocol_title and "test" not in protocol.protocol_title.lower():
+                confluence_title = f"Протокол встречи{date_part}. {protocol.protocol_title}"
+
             # Stage: rendering (technical)
             self._report_progress("rendering", 85, item)
             try:
@@ -197,7 +208,7 @@ class ProcessingService:
                     try:
                         parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
                         page = self.confluence.create_page(
-                            title=protocol.protocol_title,
+                            title=confluence_title,
                             storage_html=html,
                             parent_page_id=parent_id,
                         )

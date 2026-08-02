@@ -29,6 +29,8 @@ class BatchItem:
     error_details: str | None = None
     estimated_seconds: float | None = None
     actual_seconds: float | None = None
+    client_name: str = ""
+    project_name: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -56,6 +58,8 @@ class BatchItem:
             "error_details": self.error_details,
             "estimated_seconds": self.estimated_seconds,
             "actual_seconds": self.actual_seconds,
+            "client_name": self.client_name,
+            "project_name": self.project_name,
         }
 
     @classmethod
@@ -87,6 +91,8 @@ class BatchItem:
         item.error_details = d.get("error_details")
         item.estimated_seconds = d.get("estimated_seconds")
         item.actual_seconds = d.get("actual_seconds")
+        item.client_name = d.get("client_name", "")
+        item.project_name = d.get("project_name", "")
         return item
 
 
