@@ -205,16 +205,25 @@ class ProcessingService:
 
             if not publishable:
                 reasons = []
+                details = []
                 if not protocol.source_alignment_passed: reasons.append("source_alignment")
                 if not protocol.fact_validation_passed: reasons.append("fact_validation")
-                if not protocol.structure_validation_passed: reasons.append("structure_validation")
-                if not protocol.render_validation_passed: reasons.append("render_validation")
+                if not protocol.structure_validation_passed:
+                    reasons.append("structure_validation")
+                    for issue in getattr(post_correction_struct_report, 'issues', [])[:5]:
+                        details.append(f"  - {issue.message}")
+                if not protocol.render_validation_passed:
+                    reasons.append("render_validation")
+                    for issue in getattr(render_report, 'issues', [])[:5]:
+                        details.append(f"  - {issue.message}")
                 if not protocol.topic_coverage_passed: reasons.append("topic_coverage")
                 if not protocol.topic_alignment_passed: reasons.append("topic_alignment")
                 item.error_details = f"Валидация не пройдена: {', '.join(reasons)}"
                 if hasattr(protocol, 'topic_blocks'):
                     tw = sum(tb.word_count for tb in protocol.topic_blocks if hasattr(tb, 'word_count'))
                     item.error_details += f"\nТематических слов: {tw}, тем: {len(protocol.topic_blocks)}"
+                if details:
+                    item.error_details += "\n" + "\n".join(details)
 
             if item.debug_directory:
                 self._save_artifacts(item.debug_directory, protocol, html, transcript_text, item)

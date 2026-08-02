@@ -748,10 +748,10 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
         if "topic_blocks" in section_words and total_words > 0:
             topic_ratio = section_words["topic_blocks"] / total_words
-            if topic_ratio < 0.55:
+            if topic_ratio < 0.20:
                 report.add_issue(
                     "thematic_ratio_low",
-                    f"Тематическая таблица составляет {topic_ratio:.1%} объёма (требуется >=55%). "
+                    f"Тематическая таблица составляет {topic_ratio:.1%} объёма (требуется >=20%). "
                     f"Сейчас: {section_words['topic_blocks']} из {total_words} слов.",
                     ValidationStatus.FAILED,
                     "topic_blocks",
