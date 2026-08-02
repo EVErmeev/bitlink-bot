@@ -146,11 +146,14 @@ class ProcessingService:
 
             date_part = ""
             if meeting_date:
-                date_part = f" от {meeting_date.strftime('%d.%m.%Y')}"
-            extra = f". {item.client_name} — {item.project_name}" if item.client_name else ""
-            confluence_title = f"Протокол встречи{date_part}{extra}"
+                date_part = f" от {meeting_date.strftime('%d.%m.%Y')}."
+            confluence_title = f"Протокол встречи{date_part}"
             if protocol.protocol_title and "test" not in protocol.protocol_title.lower():
-                confluence_title = f"Протокол встречи{date_part}. {protocol.protocol_title}"
+                confluence_title += f" {protocol.protocol_title}"
+            if item.client_name:
+                confluence_title += f" — {item.client_name}"
+                if item.project_name:
+                    confluence_title += f", {item.project_name}"
 
             # Stage: rendering (technical)
             self._report_progress("rendering", 85, item)
