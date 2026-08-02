@@ -15,9 +15,9 @@ def build_transcription_client(config: RuntimeConfig):
     if config.transcription_provider == "mock":
         return TranscriptionClient()
     if config.transcription_provider == "disabled":
-        raise ValueError("Transcription disabled - cannot transcribe")
+        raise ValueError("Transcription disabled")
     if config.transcription_provider == "onebit_newton_cli":
-        return TranscriptionClient()
+        return TranscriptionClient(token=config.onebit_token, cli_path=config.onebit_cli_path)
     raise ValueError(f"Unknown transcription_provider: {config.transcription_provider}")
 
 

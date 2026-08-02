@@ -1,6 +1,7 @@
 import importlib
 import json
 import os
+import tempfile
 import tkinter as tk
 from datetime import UTC, datetime
 from pathlib import Path
@@ -254,11 +255,9 @@ class SettingsFrame(ttk.Frame):
         frame = ttk.LabelFrame(self.scrollable, text="БИТ Ньютон CLI", padding=10)
         frame.pack(fill=tk.X, padx=10, pady=5)
 
-        ttk.Label(frame, text="JWT-токен:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        ttk.Label(frame, text="Токен БИТ Ньютон:").grid(row=0, column=0, sticky=tk.W, pady=2)
         self._newton_token_entry = ttk.Entry(frame, width=50, show="*")
         self._newton_token_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-        self._create_tooltip(self._newton_token_entry,
-                             "JWT обычно состоит из трёх частей, разделённых точками.")
 
         self._newton_show_token_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(frame, text="Показать", variable=self._newton_show_token_var,
@@ -485,7 +484,7 @@ class SettingsFrame(ttk.Frame):
             return
         if not token:
             self._newton_status_label.configure(
-                text="Ошибка: токен не указан. Заполните поле «JWT-токен» в блоке БИТ Ньютон CLI.", foreground="red")
+                text="Ошибка: токен не указан. Заполните поле «Токен БИТ Ньютон» в блоке БИТ Ньютон CLI.", foreground="red")
             return
 
         self._newton_status_label.configure(text="Проверяю токен и LLM...", foreground="#3366cc")
@@ -573,21 +572,17 @@ class SettingsFrame(ttk.Frame):
             if llm_result.exit_code is not None:
                 lines.append(f"  exit_code: {llm_result.exit_code}")
         else:
-            if path and os.path.isfile(path):
-                from services.process_runner import run_process
-                rv = run_process(self._build_cli_args("version"), timeout_seconds=15)
-                lines.append(f"CLI version exit={rv.returncode}")
-                if rv.stdout.strip():
-                    lines.append(f"  stdout: {rv.stdout.strip()[:200]}")
-                if rv.stderr.strip():
-                    lines.append(f"  stderr: {rv.stderr.strip()[:200]}")
+            lines.append("LLM check: не выполнялся. Нажмите «Проверить токен и LLM» для получения диагностики.")
 
-                rh = run_process(self._build_cli_args("health"), timeout_seconds=15)
-                lines.append(f"CLI health exit={rh.returncode}")
-                if rh.stdout.strip():
-                    lines.append(f"  stdout: {rh.stdout.strip()[:200]}")
-                if rh.stderr.strip():
-                    lines.append(f"  stderr: {rh.stderr.strip()[:200]}")
+        transcription_result = self._last_results.get("transcription")
+        if transcription_result:
+            lines.append(f"Transcription check: status={transcription_result.status}, message={transcription_result.safe_message[:200]}")
+        else:
+            lines.append("Transcription check: не выполнялся.")
+
+        newton_result = self._last_results.get("newton")
+        if newton_result:
+            lines.append(f"Newton CLI: status={newton_result.status}, message={newton_result.safe_message[:200]}")
 
         lines.append(f"ONEBIT_NEWTON_TOKEN env: {'задан' if os.getenv('ONEBIT_NEWTON_TOKEN') else 'не задан'}")
         lines.append(f"NEWTON_TOKEN env: {'задан' if os.getenv('NEWTON_TOKEN') else 'не задан'}")
@@ -623,7 +618,11 @@ class SettingsFrame(ttk.Frame):
 
         btn = ttk.Button(frame, text="Проверить подключение",
                          command=self._test_transcription)
-        btn.grid(row=3, column=0, columnspan=2, pady=5, sticky=tk.W)
+        btn.grid(row=3, column=0, pady=5, sticky=tk.W)
+
+        self._transcription_file_btn = ttk.Button(frame, text="Проверить транскрибацию файлом...",
+                                                   command=self._test_transcription_with_file)
+        self._transcription_file_btn.grid(row=3, column=1, pady=5, sticky=tk.W, padx=5)
 
     def _test_transcription(self):
         provider = self._transcription_provider_var.get()
@@ -654,7 +653,7 @@ class SettingsFrame(ttk.Frame):
             cfg = OneBitNewtonConfig(token=snap.token, cli_path=snap.cli_path, transport="native", timeout_seconds=snap.timeout_seconds)
             p = OneBitNewtonTranscriptionProvider(config=cfg)
             conn = p.check_connection()
-            return ConnectionCheckResult(service_id="transcription", provider="onebit_newton_cli", status="PASS" if conn.ok else "FAIL", stage=conn.stage, safe_message=conn.safe_message[:200])
+            return ConnectionCheckResult(service_id="transcription", provider="onebit_newton_cli", status="PARTIAL", stage=conn.stage, safe_message=conn.safe_message[:200])
 
         def on_complete(check_id, result):
             self._update_transcription_status(result)
@@ -662,10 +661,71 @@ class SettingsFrame(ttk.Frame):
         self._runner.start_check("transcription", worker_fn, on_complete)
         return make_mock_result("transcription")
 
+    def _test_transcription_with_file(self):
+        provider = self._transcription_provider_var.get()
+        if provider == "disabled":
+            messagebox.showwarning("Транскрибация отключена", "Выберите провайдер, отличный от disabled.")
+            return
+        if provider == "mock":
+            messagebox.showinfo("Mock-режим", "В mock-режиме транскрибация всегда работает. Переключите провайдер на onebit_newton_cli для реальной проверки.")
+            return
+
+        from tkinter import filedialog
+        filepath = filedialog.askopenfilename(
+            title="Выберите аудио/видео файл для транскрибации",
+            filetypes=[
+                ("Audio/Video files", "*.mp3 *.wav *.ogg *.mp4 *.avi *.mkv *.webm"),
+                ("All files", "*.*"),
+            ])
+        if not filepath:
+            return
+
+        snap = self._snapshot_newton()
+        if not snap.token:
+            messagebox.showerror("Ошибка", "Токен БИТ Ньютон не указан.")
+            return
+        if not snap.cli_path:
+            messagebox.showerror("Ошибка", "CLI path не указан.")
+            return
+
+        self._transcription_status_label.configure(text="Выполняется транскрибация...", foreground="blue")
+        self._transcription_file_btn.configure(state=tk.DISABLED)
+        self.update_idletasks()
+
+        def worker_fn():
+            from services.transcription_service import (
+                TranscriptionClient,
+                TranscriptionError,
+            )
+            client = TranscriptionClient(token=snap.token, cli_path=snap.cli_path,
+                engine=self._transcription_engine_var.get(), timeout_seconds=snap.timeout_seconds)
+            try:
+                out_dir = tempfile.gettempdir()
+                transcript = client.transcribe_video(Path(filepath), Path(out_dir))
+                return ConnectionCheckResult(
+                    service_id="transcription", provider="onebit_newton_cli",
+                    status="PASS",
+                    stage="real_transcription",
+                    safe_message=f"Транскрибация выполнена успешно ({len(transcript)} символов)")
+            except TranscriptionError as e:
+                return ConnectionCheckResult(
+                    service_id="transcription", provider="onebit_newton_cli",
+                    status="FAIL",
+                    stage=e.stage,
+                    safe_message=f"[{e.code}] {e.safe_message[:200]}")
+
+        def on_complete(check_id, result):
+            self._transcription_file_btn.configure(state=tk.NORMAL)
+            self._update_transcription_status(result)
+
+        self._runner.start_check("transcription_file", worker_fn, on_complete)
+
     def _update_transcription_status(self, result):
         self._last_results["transcription"] = result
         if result.status == "PASS":
             self._transcription_status_label.configure(text=result.safe_message[:120], foreground="green")
+        elif result.status == "PARTIAL":
+            self._transcription_status_label.configure(text=result.safe_message[:120], foreground="#cc6600")
         elif result.status == "MOCK":
             self._transcription_status_label.configure(text="DEMO / MOCK", foreground="#cc6600")
         elif result.status == "FAIL":
@@ -1308,8 +1368,8 @@ class SettingsFrame(ttk.Frame):
         if result.returncode == 0:
             return ConnectionCheckResult(
                 service_id="transcription", provider="onebit_newton_cli",
-                status="PASS", stage="transcribe_help",
-                safe_message="Transcription CLI доступен (transcribe --help OK)")
+                status="PARTIAL", stage="transcribe_help",
+                safe_message="Transcription CLI доступен (transcribe --help OK). Для полной проверки используйте кнопку «Проверить транскрибацию файлом...».")
         else:
             return ConnectionCheckResult(
                 service_id="transcription", provider="onebit_newton_cli",

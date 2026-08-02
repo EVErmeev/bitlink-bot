@@ -1,6 +1,5 @@
 """LLM provider abstraction layer."""
 import json
-import os
 import re
 import tempfile
 from dataclasses import dataclass
@@ -123,6 +122,7 @@ class OpenAICompatibleProvider:
 class OneBitNewtonCLIProvider:
     def __init__(self, cli_path="C:\\Users\\egore\\AppData\\Local\\NewtonCLI\\newton.cmd",
                  transport="native", model="gpt4", token="", timeout_seconds=120):
+        from services.newton_cli import build_newton_command as _bnc
         self.cli_path = cli_path
         self.transport = transport
         if model not in ("llama", "gpt4"):
@@ -130,15 +130,11 @@ class OneBitNewtonCLIProvider:
         self.model = model
         self.token = token
         self.timeout_seconds = timeout_seconds
-
-    def _build_base_args(self) -> list:
-        if self.cli_path.endswith(".cmd") or self.cli_path.endswith(".bat"):
-            return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", self.cli_path]
-        return [self.cli_path]
+        self._bnc = _bnc
 
     def check_connection(self) -> ConnectionCheckResult:
         from services.process_runner import run_process
-        args = self._build_base_args() + ["version"]
+        args = self._bnc(self.cli_path, "version")
         result = run_process(args, timeout_seconds=min(15, self.timeout_seconds),
                             secret_values=[self.token] if self.token else None)
         if result.returncode == 0:
@@ -163,7 +159,7 @@ class OneBitNewtonCLIProvider:
         _os.close(fd)
 
         try:
-            base = self._build_base_args()
+            base = self._bnc(self.cli_path)
             args = base + ["summarize", "-", "--model", mdl, "--output", output_path]
             if system_prompt:
                 args += ["--system-prompt", system_prompt]
@@ -236,9 +232,11 @@ class OneBitNewtonTranscriptionProvider:
         self.config = config
 
     def check_connection(self) -> ConnectionCheckResult:
+        from services.newton_cli import build_newton_command
         from services.process_runner import run_process
+        args = build_newton_command(self.config.cli_path, "transcribe", "--help")
         r = run_process(
-            [self.config.cli_path, "transcribe", "--help"],
+            args,
             timeout_seconds=15,
             secret_values=[self.config.token] if self.config.token else None,
         )
@@ -265,9 +263,12 @@ class OneBitNewtonTranscriptionProvider:
         try:
             env = _os.environ.copy()
             env["NEWTON_TOKEN"] = self.config.token
+            from services.newton_cli import build_newton_command
             from services.process_runner import run_process
+            args = build_newton_command(self.config.cli_path, "transcribe", str(audio_path),
+                                        "--engine", engine, "--output", out)
             r = run_process(
-                [self.config.cli_path, "transcribe", str(audio_path), "--engine", engine, "--output", out],
+                args,
                 env=env, timeout_seconds=self.config.timeout_seconds,
                 secret_values=[self.config.token] if self.config.token else None,
             )
