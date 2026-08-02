@@ -11,6 +11,7 @@ from dotenv import load_dotenv, set_key
 
 import settings
 from services.connection_checks import (
+    ConnectionCheckInput,
     ConnectionCheckResult,
     make_error_result,
     make_mock_result,
@@ -33,7 +34,7 @@ class SettingsFrame(ttk.Frame):
 
     PROVIDER_OPTIONS = {
         "bitlink": [("mock", "mock"), ("real", "real")],
-        "newton": [("mock", "mock"), ("real", "real")],
+        "transcription": [("disabled", "disabled"), ("mock", "mock"), ("onebit_newton_cli", "onebit_newton_cli")],
         "confluence": [("disabled", "disabled"), ("mock", "mock"), ("rest", "rest")],
         "telegram": [("disabled", "disabled"), ("mock", "mock"), ("real", "real")],
     }
@@ -104,11 +105,9 @@ class SettingsFrame(ttk.Frame):
             ("password", "Пароль:", "*"),
         ], self._test_bitlink, "bitlink")
 
-        self._build_block("Newton - транскрибация видео", [
-            ("token", "Токен:", "*"),
-            ("path", "Путь:", None),
-            ("base_url", "Base URL:", None),
-        ], self._test_newton, "newton")
+        self._build_newton_cli_block()
+
+        self._build_transcription_block()
 
         self._build_block("Confluence", [
             ("token", "Токен:", "*"),
@@ -194,7 +193,7 @@ class SettingsFrame(ttk.Frame):
     def _default_provider(self, check_id):
         defaults = {
             "bitlink": "mock",
-            "newton": "mock",
+            "transcription": "mock",
             "confluence": "rest",
             "telegram": "mock",
         }
@@ -249,105 +248,65 @@ class SettingsFrame(ttk.Frame):
 
         self._runner.start_check(check_id, worker_fn, on_complete)
 
-    # ── Protocol block ──
+    # ── БИТ Ньютон CLI block ──
 
-    def _build_protocol_block(self):
-        frame = ttk.LabelFrame(self.scrollable, text="Протокол", padding=10)
+    def _build_newton_cli_block(self):
+        frame = ttk.LabelFrame(self.scrollable, text="БИТ Ньютон CLI", padding=10)
         frame.pack(fill=tk.X, padx=10, pady=5)
 
-        ttk.Label(frame, text="Шаблон по умолчанию:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self._template_var = tk.StringVar(value="project_detailed")
-        template_combo = ttk.Combobox(frame, textvariable=self._template_var, state="readonly", width=40)
-        template_combo["values"] = [t[0] for t in self.TEMPLATE_OPTIONS]
-        template_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-
-        ttk.Label(frame, text="Режим по умолчанию:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self._mode_var = tk.StringVar(value="auto")
-        mode_combo = ttk.Combobox(frame, textvariable=self._mode_var, state="readonly", width=40)
-        mode_combo["values"] = [m[0] for m in self.MODE_OPTIONS]
-        mode_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
-
-        self._continue_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frame, text="Продолжать обработку после ошибки",
-                        variable=self._continue_var).grid(
-            row=2, column=0, columnspan=2, sticky=tk.W, pady=2
-        )
-
-    # ── LLM block ──
-
-    def _build_llm_block(self):
-        frame = ttk.LabelFrame(self.scrollable, text="Нейросеть / LLM", padding=10)
-        frame.pack(fill=tk.X, padx=10, pady=5)
-
-        ttk.Label(frame, text="Провайдер:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self._llm_provider_var = tk.StringVar(value="onebit_newton_cli")
-        provider_combo = ttk.Combobox(frame, textvariable=self._llm_provider_var, state="readonly", width=25)
-        provider_combo["values"] = ["mock", "onebit_newton_cli", "openai_compatible"]
-        provider_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-        provider_combo.bind("<<ComboboxSelected>>", self._on_llm_provider_change)
-
-        # Status label
-        ttk.Label(frame, text="Статус:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self._llm_status_label = ttk.Label(frame, text="Не проверено", foreground="gray")
-        self._llm_status_label.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
-
-        # Sub-panels
-        self._onebit_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
-        self._onebit_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
-        self._onebit_panel.grid_remove()
-        self._build_onebit_panel()
-
-        self._openai_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
-        self._openai_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
-        self._openai_panel.grid_remove()
-        self._build_openai_panel()
-
-        self._mock_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
-        self._mock_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
-        self._mock_panel.grid_remove()
-        self._build_mock_panel()
-
-        self._show_provider_panel("onebit_newton_cli")
-
-    def _build_onebit_panel(self):
-        p = self._onebit_panel
-
-        ttk.Label(p, text="JWT-токен БИТ Ньютон CLI:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self._llm_onebit_token_entry = ttk.Entry(p, width=50, show="*")
-        self._llm_onebit_token_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-        self._create_tooltip(self._llm_onebit_token_entry,
+        ttk.Label(frame, text="JWT-токен:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self._newton_token_entry = ttk.Entry(frame, width=50, show="*")
+        self._newton_token_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        self._create_tooltip(self._newton_token_entry,
                              "JWT обычно состоит из трёх частей, разделённых точками.")
 
-        self._llm_onebit_show_token_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(p, text="Показать", variable=self._llm_onebit_show_token_var,
-                        command=self._toggle_onebit_token_visibility).grid(
+        self._newton_show_token_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(frame, text="Показать", variable=self._newton_show_token_var,
+                        command=self._toggle_newton_token_visibility).grid(
             row=0, column=2, sticky=tk.W, padx=5)
 
-        ttk.Label(p, text="Путь CLI:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self._llm_onebit_cli_path_entry = ttk.Entry(p, width=50)
-        self._llm_onebit_cli_path_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(frame, text="Путь CLI:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self._newton_cli_path_entry = ttk.Entry(frame, width=50)
+        self._newton_cli_path_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
 
-        ttk.Label(p, text="Модель:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self._llm_onebit_model_var = tk.StringVar(value="gpt4")
-        model_combo = ttk.Combobox(p, textvariable=self._llm_onebit_model_var, state="readonly", width=15)
-        model_combo["values"] = ["llama", "gpt4"]
-        model_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(frame, text="Transport:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self._newton_transport_var = tk.StringVar(value="native")
+        transport_combo = ttk.Combobox(frame, textvariable=self._newton_transport_var,
+                                       state="readonly", width=15)
+        transport_combo["values"] = ["native"]
+        transport_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
 
-        ttk.Label(p, text="Таймаут (сек):").grid(row=3, column=0, sticky=tk.W, pady=2)
-        self._llm_onebit_timeout_entry = ttk.Entry(p, width=10)
-        self._llm_onebit_timeout_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        ttk.Label(frame, text="Таймаут (сек):").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self._newton_timeout_entry = ttk.Entry(frame, width=10)
+        self._newton_timeout_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        self._newton_timeout_entry.insert(0, "120")
 
-        btn_frame = ttk.Frame(p)
-        btn_frame.grid(row=4, column=0, columnspan=3, pady=5, sticky=tk.W)
+        ttk.Label(frame, text="Кодировка:").grid(row=4, column=0, sticky=tk.W, pady=2)
+        self._newton_encoding_var = tk.StringVar(value="auto")
+        encoding_combo = ttk.Combobox(frame, textvariable=self._newton_encoding_var,
+                                      state="readonly", width=15)
+        encoding_combo["values"] = ["auto", "utf-8", "cp866", "cp1251"]
+        encoding_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # Status label
+        self._newton_status_label = ttk.Label(frame, text="Не проверено", foreground="gray")
+        self._newton_status_label.grid(row=5, column=0, columnspan=3,
+                                       sticky=tk.W, pady=2)
+
+        btn_frame = ttk.Frame(frame)
+        btn_frame.grid(row=6, column=0, columnspan=3, pady=5, sticky=tk.W)
         ttk.Button(btn_frame, text="Обнаружить CLI", command=self._discover_cli).pack(side=tk.LEFT, padx=3)
-        self._llm_version_btn = ttk.Button(btn_frame, text="Проверить версию", command=self._check_cli_version)
-        self._llm_version_btn.pack(side=tk.LEFT, padx=3)
-        self._llm_health_btn = ttk.Button(btn_frame, text="Проверить health", command=self._check_cli_health)
-        self._llm_health_btn.pack(side=tk.LEFT, padx=3)
-        self._llm_token_btn = ttk.Button(btn_frame, text="Проверить токен и LLM",
-                                         command=self._check_cli_token_and_llm)
-        self._llm_token_btn.pack(side=tk.LEFT, padx=3)
-        ttk.Button(btn_frame, text="Копировать диагностику", command=self._copy_diagnostics).pack(side=tk.LEFT, padx=3)
+        self._newton_version_btn = ttk.Button(btn_frame, text="Проверить версию",
+                                              command=self._check_cli_version)
+        self._newton_version_btn.pack(side=tk.LEFT, padx=3)
+        self._newton_health_btn = ttk.Button(btn_frame, text="Проверить health",
+                                             command=self._check_cli_health)
+        self._newton_health_btn.pack(side=tk.LEFT, padx=3)
+        self._newton_token_btn = ttk.Button(btn_frame, text="Проверить токен и LLM",
+                                            command=self._check_cli_token_and_llm)
+        self._newton_token_btn.pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="Копировать диагностику",
+                   command=self._copy_diagnostics).pack(side=tk.LEFT, padx=3)
 
     def _create_tooltip(self, widget, text):
         def enter(event):
@@ -369,88 +328,47 @@ class SettingsFrame(ttk.Frame):
         widget.bind("<Enter>", enter)
         widget.bind("<Leave>", leave)
 
-    def _build_openai_panel(self):
-        p = self._openai_panel
-
-        ttk.Label(p, text="Base URL:").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self._llm_openai_url_entry = ttk.Entry(p, width=50)
-        self._llm_openai_url_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
-
-        ttk.Label(p, text="API Key:").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self._llm_openai_key_entry = ttk.Entry(p, width=50, show="*")
-        self._llm_openai_key_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
-
-        self._llm_openai_show_key_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(p, text="Показать API Key", variable=self._llm_openai_show_key_var,
-                        command=self._toggle_openai_key_visibility).grid(
-            row=1, column=2, sticky=tk.W, padx=5)
-
-        ttk.Label(p, text="Model:").grid(row=2, column=0, sticky=tk.W, pady=2)
-        self._llm_openai_model_entry = ttk.Entry(p, width=50)
-        self._llm_openai_model_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
-
-        btn_frame = ttk.Frame(p)
-        btn_frame.grid(row=3, column=0, columnspan=3, pady=5, sticky=tk.W)
-        ttk.Button(btn_frame, text="Проверить LLM", command=self._test_openai_llm).pack(side=tk.LEFT, padx=3)
-
-    def _build_mock_panel(self):
-        p = self._mock_panel
-        ttk.Label(p, text="Демо-режим — проверка не требуется. Ответы генерируются локально.",
-                  foreground="#cc6600", wraplength=400).grid(
-            row=0, column=0, columnspan=3, sticky=tk.W, pady=5)
-
-    # ── Panel switching ──
-
-    def _show_provider_panel(self, provider):
-        self._onebit_panel.grid_remove()
-        self._openai_panel.grid_remove()
-        self._mock_panel.grid_remove()
-
-        if provider == "onebit_newton_cli":
-            self._onebit_panel.grid()
-            self._llm_status_label.configure(text="Не проверено", foreground="gray")
-        elif provider == "openai_compatible":
-            self._openai_panel.grid()
-            self._llm_status_label.configure(text="Не проверено", foreground="gray")
-        elif provider == "mock":
-            self._mock_panel.grid()
-            self._llm_status_label.configure(text="Mock — проверка не требуется", foreground="#cc6600")
-
-    def _on_llm_provider_change(self, event=None):
-        self._show_provider_panel(self._llm_provider_var.get())
-
-    # ── Token visibility ──
-
-    def _toggle_onebit_token_visibility(self):
-        show = self._llm_onebit_show_token_var.get()
-        self._llm_onebit_token_entry.configure(show="" if show else "*")
-
-    def _toggle_openai_key_visibility(self):
-        show = self._llm_openai_show_key_var.get()
-        self._llm_openai_key_entry.configure(show="" if show else "*")
-
     # ── Newton CLI helpers ──
 
-    def _get_cli_path(self):
-        return self._llm_onebit_cli_path_entry.get().strip()
+    def _get_newton_cli_path(self):
+        return self._newton_cli_path_entry.get().strip()
 
-    def _get_onebit_token(self):
-        return self._llm_onebit_token_entry.get().strip()
+    def _get_newton_token(self):
+        return self._newton_token_entry.get().strip()
 
-    def _get_onebit_model(self):
-        return self._llm_onebit_model_var.get()
+    def _get_newton_transport(self):
+        return self._newton_transport_var.get()
 
-    def _get_onebit_timeout(self):
+    def _get_newton_timeout(self):
         try:
-            return int(self._llm_onebit_timeout_entry.get().strip() or "120")
+            return int(self._newton_timeout_entry.get().strip() or "120")
         except ValueError:
             return 120
 
+    def _get_newton_encoding(self):
+        return self._newton_encoding_var.get()
+
+    def _get_newton_model(self):
+        return self._llm_onebit_model_var.get()
+
+    def _snapshot_newton(self) -> ConnectionCheckInput:
+        return ConnectionCheckInput(
+            service_id="newton",
+            token=self._get_newton_token(),
+            cli_path=self._get_newton_cli_path(),
+            timeout_seconds=self._get_newton_timeout(),
+            output_encoding=self._get_newton_encoding(),
+        )
+
     def _build_cli_args(self, subcommand):
-        path = self._get_cli_path()
+        path = self._get_newton_cli_path()
         if path.endswith(".cmd") or path.endswith(".bat"):
             return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", path, subcommand]
         return [path, subcommand]
+
+    def _toggle_newton_token_visibility(self):
+        show = self._newton_show_token_var.get()
+        self._newton_token_entry.configure(show="" if show else "*")
 
     # ── Newton CLI diagnostics ──
 
@@ -464,25 +382,29 @@ class SettingsFrame(ttk.Frame):
         for path in candidates:
             resolved = shutil.which(path)
             if resolved:
-                self._llm_onebit_cli_path_entry.delete(0, tk.END)
-                self._llm_onebit_cli_path_entry.insert(0, resolved)
-                self._llm_status_label.configure(text=f"Найден: {resolved}", foreground="green")
+                self._newton_cli_path_entry.delete(0, tk.END)
+                self._newton_cli_path_entry.insert(0, resolved)
+                self._newton_status_label.configure(text=f"Найден: {resolved}", foreground="green")
                 return
-        self._llm_status_label.configure(text="CLI не найден", foreground="red")
+        self._newton_status_label.configure(text="CLI не найден", foreground="red")
 
     def _check_cli_version(self):
         from services.process_runner import run_process as _rp
 
-        path = self._get_cli_path()
-        if not path:
-            self._llm_status_label.configure(text="Укажите путь CLI", foreground="red")
+        snap = self._snapshot_newton()
+        if not snap.cli_path:
+            self._newton_status_label.configure(text="Укажите путь CLI", foreground="red")
             return
 
-        self._llm_status_label.configure(text="Проверка версии...", foreground="gray")
-        self._llm_version_btn.configure(state=tk.DISABLED)
+        self._newton_status_label.configure(text="Проверка версии...", foreground="gray")
+        self._newton_version_btn.configure(state=tk.DISABLED)
 
         def worker_fn():
-            args = self._build_cli_args("version")
+            path = snap.cli_path
+            if path.endswith(".cmd") or path.endswith(".bat"):
+                args = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", path, "version"]
+            else:
+                args = [path, "version"]
             result = _rp(args, timeout_seconds=15)
             self._run_on_ui(lambda r=result: self._on_version_result(r))
             return ConnectionCheckResult(
@@ -498,27 +420,31 @@ class SettingsFrame(ttk.Frame):
                                   lambda cid, r: None)
 
     def _on_version_result(self, result):
-        self._llm_version_btn.configure(state=tk.NORMAL)
+        self._newton_version_btn.configure(state=tk.NORMAL)
         if result.returncode == 0:
-            self._llm_status_label.configure(
+            self._newton_status_label.configure(
                 text=f"Версия: {result.stdout.strip()[:100]}", foreground="green")
         else:
-            self._llm_status_label.configure(
+            self._newton_status_label.configure(
                 text=f"CLI exit {result.returncode}: {result.stderr[:150]}", foreground="red")
 
     def _check_cli_health(self):
         from services.process_runner import run_process as _rp
 
-        path = self._get_cli_path()
-        if not path:
-            self._llm_status_label.configure(text="Укажите путь CLI", foreground="red")
+        snap = self._snapshot_newton()
+        if not snap.cli_path:
+            self._newton_status_label.configure(text="Укажите путь CLI", foreground="red")
             return
 
-        self._llm_status_label.configure(text="Проверка health...", foreground="gray")
-        self._llm_health_btn.configure(state=tk.DISABLED)
+        self._newton_status_label.configure(text="Проверка health...", foreground="gray")
+        self._newton_health_btn.configure(state=tk.DISABLED)
 
         def worker_fn():
-            args = self._build_cli_args("health")
+            path = snap.cli_path
+            if path.endswith(".cmd") or path.endswith(".bat"):
+                args = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", path, "health"]
+            else:
+                args = [path, "health"]
             result = _rp(args, timeout_seconds=15)
             self._run_on_ui(lambda r=result: self._on_health_result(r))
             return ConnectionCheckResult(
@@ -534,35 +460,36 @@ class SettingsFrame(ttk.Frame):
                                   lambda cid, r: None)
 
     def _on_health_result(self, result):
-        self._llm_health_btn.configure(state=tk.NORMAL)
+        self._newton_health_btn.configure(state=tk.NORMAL)
         if result.returncode == 0:
-            self._llm_status_label.configure(
+            self._newton_status_label.configure(
                 text=f"Health OK: {result.stdout.strip()[:100]}", foreground="green")
             messagebox.showinfo("Health", "CLI health check прошёл успешно.\n\n"
                                 "Примечание: health НЕ проверяет аутентификацию токена. "
                                 "Для проверки токена нажмите «Проверить токен и LLM».")
         else:
-            self._llm_status_label.configure(
+            self._newton_status_label.configure(
                 text=f"Health exit {result.returncode}", foreground="red")
 
     def _check_cli_token_and_llm(self):
         from services.llm_providers import OneBitNewtonCLIProvider, OneBitProviderError
 
-        path = self._get_cli_path()
-        token = self._get_onebit_token()
-        model = self._get_onebit_model()
-        timeout = self._get_onebit_timeout()
+        snap = self._snapshot_newton()
+        path = snap.cli_path
+        token = snap.token
+        model = self._get_newton_model()
+        timeout = snap.timeout_seconds
 
         if not path:
-            self._llm_status_label.configure(text="Укажите путь CLI", foreground="red")
+            self._newton_status_label.configure(text="Укажите путь CLI", foreground="red")
             return
         if not token:
-            self._llm_status_label.configure(
-                text="Ошибка: токен не указан. Заполните поле «JWT-токен БИТ Ньютон CLI».", foreground="red")
+            self._newton_status_label.configure(
+                text="Ошибка: токен не указан. Заполните поле «JWT-токен» в блоке БИТ Ньютон CLI.", foreground="red")
             return
 
-        self._llm_status_label.configure(text="Проверяю токен и LLM...", foreground="#3366cc")
-        self._llm_token_btn.configure(state=tk.DISABLED)
+        self._newton_status_label.configure(text="Проверяю токен и LLM...", foreground="#3366cc")
+        self._newton_token_btn.configure(state=tk.DISABLED)
         self.update_idletasks()
 
         def worker_fn():
@@ -613,11 +540,13 @@ class SettingsFrame(ttk.Frame):
                                   lambda cid, r: None)
 
     def _on_token_result(self, ok, text, foreground):
-        self._llm_token_btn.configure(state=tk.NORMAL)
+        self._newton_token_btn.configure(state=tk.NORMAL)
+        self._newton_status_label.configure(text=text, foreground=foreground)
         self._llm_status_label.configure(text=text, foreground=foreground)
 
     def _on_token_error(self, e):
-        self._llm_token_btn.configure(state=tk.NORMAL)
+        self._newton_token_btn.configure(state=tk.NORMAL)
+        self._newton_status_label.configure(text=f"Ошибка [{e.code}]: {e.safe_message}", foreground="red")
         self._llm_status_label.configure(text=f"Ошибка [{e.code}]: {e.safe_message}", foreground="red")
         messagebox.showerror("Ошибка Newton CLI",
                              f"Код: {e.code}\n"
@@ -626,16 +555,16 @@ class SettingsFrame(ttk.Frame):
                              f"stderr: {e.safe_stderr[:200] if e.safe_stderr else '(нет)'}")
 
     def _copy_diagnostics(self):
-        path = self._get_cli_path()
+        path = self._get_newton_cli_path()
         lines = []
         lines.append("=== Диагностика OneBit Newton CLI ===")
         lines.append(f"CLI путь: {path}")
-        lines.append(f"Токен задан: {'да' if self._get_onebit_token() else 'нет'}")
-        lines.append(f"Модель: {self._get_onebit_model()}")
-        lines.append(f"Таймаут: {self._get_onebit_timeout()}с")
+        lines.append(f"Токен задан: {'да' if self._get_newton_token() else 'нет'}")
+        lines.append(f"Transport: {self._get_newton_transport()}")
+        lines.append(f"Таймаут: {self._get_newton_timeout()}с")
+        lines.append(f"Кодировка: {self._get_newton_encoding()}")
         lines.append(f"Файл CLI существует: {os.path.isfile(path) if path else 'путь не указан'}")
 
-        # Use stored results if available
         llm_result = self._last_results.get("llm")
         if llm_result:
             lines.append(f"LLM check: status={llm_result.status}, message={llm_result.safe_message[:200]}")
@@ -660,13 +589,202 @@ class SettingsFrame(ttk.Frame):
                 if rh.stderr.strip():
                     lines.append(f"  stderr: {rh.stderr.strip()[:200]}")
 
+        lines.append(f"ONEBIT_NEWTON_TOKEN env: {'задан' if os.getenv('ONEBIT_NEWTON_TOKEN') else 'не задан'}")
         lines.append(f"NEWTON_TOKEN env: {'задан' if os.getenv('NEWTON_TOKEN') else 'не задан'}")
-        lines.append(f"ONEBIT_LLM_TOKEN env: {'задан' if os.getenv('ONEBIT_LLM_TOKEN') else 'не задан'}")
 
         text = "\n".join(lines)
         self.clipboard_clear()
         self.clipboard_append(text)
-        self._llm_status_label.configure(text="Диагностика скопирована в буфер обмена", foreground="#3366cc")
+        self._newton_status_label.configure(text="Диагностика скопирована в буфер обмена", foreground="#3366cc")
+
+    # ── Transcription block ──
+
+    def _build_transcription_block(self):
+        frame = ttk.LabelFrame(self.scrollable, text="Транскрибация", padding=10)
+        frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Label(frame, text="Провайдер:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self._transcription_provider_var = tk.StringVar(value="mock")
+        provider_combo = ttk.Combobox(frame, textvariable=self._transcription_provider_var,
+                                      state="readonly", width=25)
+        provider_combo["values"] = ["disabled", "mock", "onebit_newton_cli"]
+        provider_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame, text="Engine:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self._transcription_engine_var = tk.StringVar(value="v3")
+        engine_combo = ttk.Combobox(frame, textvariable=self._transcription_engine_var,
+                                    state="readonly", width=15)
+        engine_combo["values"] = ["v3"]
+        engine_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        self._transcription_status_label = ttk.Label(frame, text="Не проверено", foreground="gray")
+        self._transcription_status_label.grid(row=2, column=0, columnspan=2,
+                                              sticky=tk.W, pady=2)
+
+        btn = ttk.Button(frame, text="Проверить подключение",
+                         command=self._test_transcription)
+        btn.grid(row=3, column=0, columnspan=2, pady=5, sticky=tk.W)
+
+    def _test_transcription(self):
+        provider = self._transcription_provider_var.get()
+        if provider == "disabled":
+            result = ConnectionCheckResult(
+                service_id="transcription", provider="disabled", status="SKIPPED",
+                stage="provider_check", safe_message="Сервис отключён")
+            self._transcription_status_label.configure(text="DISABLED", foreground="gray")
+            self._last_results["transcription"] = result
+            return result
+        if provider == "mock":
+            result = make_mock_result("transcription")
+            self._transcription_status_label.configure(text="DEMO / MOCK", foreground="#cc6600")
+            self._last_results["transcription"] = result
+            return result
+
+        snap = self._snapshot_newton()
+        if not snap.token:
+            result = make_not_configured_result("transcription", ["Токен"])
+            self._transcription_status_label.configure(
+                text="Токен не указан (в блоке БИТ Ньютон CLI)", foreground="red")
+            self._last_results["transcription"] = result
+            return result
+        if not snap.cli_path:
+            result = make_not_configured_result("transcription", ["CLI path"])
+            self._transcription_status_label.configure(
+                text="CLI path не указан (в блоке БИТ Ньютон CLI)", foreground="red")
+            self._last_results["transcription"] = result
+            return result
+
+        self._transcription_status_label.configure(text="Проверка...", foreground="blue")
+
+        def worker_fn():
+            from services.llm_providers import OneBitNewtonTranscriptionProvider
+            from services.runtime_config import OneBitNewtonConfig
+            cfg = OneBitNewtonConfig(
+                token=snap.token, cli_path=snap.cli_path,
+                transport="native", timeout_seconds=snap.timeout_seconds,
+                output_encoding=snap.output_encoding)
+            p = OneBitNewtonTranscriptionProvider(config=cfg)
+            conn = p.check_connection()
+            self._run_on_ui(lambda c=conn: self._on_transcription_result(c))
+            return ConnectionCheckResult(
+                service_id="transcription", provider="onebit_newton_cli",
+                status="PASS" if conn.ok else "FAIL",
+                stage=conn.stage,
+                safe_message=conn.safe_message[:200])
+
+        def on_complete(_chk_id, result):
+            pass
+
+        self._runner.start_check("transcription", worker_fn, on_complete)
+        return make_mock_result("transcription")
+
+    def _on_transcription_result(self, conn):
+        if conn.ok:
+            self._transcription_status_label.configure(
+                text=conn.safe_message[:200], foreground="green")
+        else:
+            self._transcription_status_label.configure(
+                text=conn.safe_message[:200], foreground="red")
+
+    # ── LLM block ──
+
+    def _build_llm_block(self):
+        frame = ttk.LabelFrame(self.scrollable, text="Нейросеть / LLM", padding=10)
+        frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Label(frame, text="Провайдер:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self._llm_provider_var = tk.StringVar(value="onebit_newton_cli")
+        provider_combo = ttk.Combobox(frame, textvariable=self._llm_provider_var, state="readonly", width=25)
+        provider_combo["values"] = ["mock", "onebit_newton_cli", "openai_compatible"]
+        provider_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        provider_combo.bind("<<ComboboxSelected>>", self._on_llm_provider_change)
+
+        ttk.Label(frame, text="Статус:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self._llm_status_label = ttk.Label(frame, text="Не проверено", foreground="gray")
+        self._llm_status_label.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        # Sub-panels
+        self._onebit_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
+        self._onebit_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
+        self._onebit_panel.grid_remove()
+        self._build_onebit_panel()
+
+        self._openai_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
+        self._openai_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
+        self._openai_panel.grid_remove()
+        self._build_openai_panel()
+
+        self._mock_panel = ttk.Frame(frame, padding=(0, 5, 0, 0))
+        self._mock_panel.grid(row=2, column=0, columnspan=3, sticky=tk.W + tk.E)
+        self._mock_panel.grid_remove()
+        self._build_mock_panel()
+
+        self._show_provider_panel("onebit_newton_cli")
+
+    def _build_onebit_panel(self):
+        p = self._onebit_panel
+
+        ttk.Label(p, text="Модель:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self._llm_onebit_model_var = tk.StringVar(value="gpt4")
+        model_combo = ttk.Combobox(p, textvariable=self._llm_onebit_model_var, state="readonly", width=15)
+        model_combo["values"] = ["llama", "gpt4"]
+        model_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(p, text="Токен и путь CLI настраиваются в блоке «БИТ Ньютон CLI» выше.",
+                  foreground="gray", wraplength=400).grid(
+            row=1, column=0, columnspan=3, sticky=tk.W, pady=5)
+
+    def _build_openai_panel(self):
+        p = self._openai_panel
+
+        ttk.Label(p, text="Base URL:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self._llm_openai_url_entry = ttk.Entry(p, width=50)
+        self._llm_openai_url_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(p, text="API Key:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self._llm_openai_key_entry = ttk.Entry(p, width=50, show="*")
+        self._llm_openai_key_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        self._llm_openai_show_key_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(p, text="Показать API Key", variable=self._llm_openai_show_key_var,
+                        command=self._toggle_openai_key_visibility).grid(
+            row=1, column=2, sticky=tk.W, padx=5)
+
+        ttk.Label(p, text="Model:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self._llm_openai_model_entry = ttk.Entry(p, width=50)
+        self._llm_openai_model_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+
+        btn_frame = ttk.Frame(p)
+        btn_frame.grid(row=3, column=0, columnspan=3, pady=5, sticky=tk.W)
+        ttk.Button(btn_frame, text="Проверить LLM", command=self._test_openai_llm).pack(side=tk.LEFT, padx=3)
+
+    def _build_mock_panel(self):
+        p = self._mock_panel
+        ttk.Label(p, text="Демо-режим — проверка не требуется. Ответы генерируются локально.",
+                  foreground="#cc6600", wraplength=400).grid(
+            row=0, column=0, columnspan=3, sticky=tk.W, pady=5)
+
+    def _show_provider_panel(self, provider):
+        self._onebit_panel.grid_remove()
+        self._openai_panel.grid_remove()
+        self._mock_panel.grid_remove()
+
+        if provider == "onebit_newton_cli":
+            self._onebit_panel.grid()
+            self._llm_status_label.configure(text="Не проверено", foreground="gray")
+        elif provider == "openai_compatible":
+            self._openai_panel.grid()
+            self._llm_status_label.configure(text="Не проверено", foreground="gray")
+        elif provider == "mock":
+            self._mock_panel.grid()
+            self._llm_status_label.configure(text="Mock — проверка не требуется", foreground="#cc6600")
+
+    def _on_llm_provider_change(self, event=None):
+        self._show_provider_panel(self._llm_provider_var.get())
+
+    def _toggle_openai_key_visibility(self):
+        show = self._llm_openai_show_key_var.get()
+        self._llm_openai_key_entry.configure(show="" if show else "*")
 
     def _test_openai_llm(self):
         url = self._llm_openai_url_entry.get().strip()
@@ -711,6 +829,30 @@ class SettingsFrame(ttk.Frame):
             self._llm_status_label.configure(text=f"Ошибка: {e}", foreground="red")
             self._last_results["llm"] = make_error_result("llm", str(e))
 
+    # ── Protocol block ──
+
+    def _build_protocol_block(self):
+        frame = ttk.LabelFrame(self.scrollable, text="Протокол", padding=10)
+        frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Label(frame, text="Шаблон по умолчанию:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self._template_var = tk.StringVar(value="project_detailed")
+        template_combo = ttk.Combobox(frame, textvariable=self._template_var, state="readonly", width=40)
+        template_combo["values"] = [t[0] for t in self.TEMPLATE_OPTIONS]
+        template_combo.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+
+        ttk.Label(frame, text="Режим по умолчанию:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self._mode_var = tk.StringVar(value="auto")
+        mode_combo = ttk.Combobox(frame, textvariable=self._mode_var, state="readonly", width=40)
+        mode_combo["values"] = [m[0] for m in self.MODE_OPTIONS]
+        mode_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        self._continue_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(frame, text="Продолжать обработку после ошибки",
+                        variable=self._continue_var).grid(
+            row=2, column=0, columnspan=2, sticky=tk.W, pady=2
+        )
+
     # ── Service check implementations ──
 
     def _check_bitlink_impl(self):
@@ -723,16 +865,6 @@ class SettingsFrame(ttk.Frame):
                 stage="provider_check", safe_message="Сервис отключён")
         return make_not_implemented_result("bitlink")
 
-    def _check_newton_impl(self):
-        provider = self._get_provider("newton")
-        if provider == "mock":
-            return make_mock_result("newton")
-        if provider == "disabled":
-            return ConnectionCheckResult(
-                service_id="newton", provider="disabled", status="SKIPPED",
-                stage="provider_check", safe_message="Сервис отключён")
-        return make_not_implemented_result("newton")
-
     def _check_confluence_impl(self):
         provider = self._get_provider("confluence")
         if provider == "disabled":
@@ -742,6 +874,7 @@ class SettingsFrame(ttk.Frame):
         if provider == "mock":
             return make_mock_result("confluence")
 
+        # Create snapshot in UI thread
         entries = self._block_entries.get("confluence", {})
         base_url_w = entries.get("base_url")
         token_ent = entries.get("token")
@@ -763,73 +896,74 @@ class SettingsFrame(ttk.Frame):
                 missing.append("Токен")
             return make_not_configured_result("confluence", missing)
 
-        headers = {"Authorization": f"Bearer {token_val}"}
-        start = datetime.now(UTC)
+        # Worker uses snapshot only, no Tkinter reads
+        def check_confluence(base_url, token, space_key, parent_id, parent_title):
+            headers = {"Authorization": f"Bearer {token}"}
+            start = datetime.now(UTC)
 
-        # Stage 1: auth check
-        try:
-            r = requests.get(f"{base_url_val}/rest/api/user/current",
-                             headers=headers, timeout=15)
-            if r.status_code != 200:
+            try:
+                r = requests.get(f"{base_url}/rest/api/user/current",
+                                 headers=headers, timeout=15)
+                if r.status_code != 200:
+                    return ConnectionCheckResult(
+                        service_id="confluence", provider="rest",
+                        status="FAIL", stage="auth_check",
+                        safe_message=f"Ошибка аутентификации: HTTP {r.status_code}",
+                        http_status=r.status_code,
+                        endpoint_or_command=f"{base_url}/rest/api/user/current")
+                user_data = r.json()
+                user_display = user_data.get("displayName", user_data.get("username", "?"))
+            except requests.RequestException as e:
                 return ConnectionCheckResult(
                     service_id="confluence", provider="rest",
                     status="FAIL", stage="auth_check",
-                    safe_message=f"Ошибка аутентификации: HTTP {r.status_code}",
-                    http_status=r.status_code,
-                    endpoint_or_command=f"{base_url_val}/rest/api/user/current")
-            user_data = r.json()
-            user_display = user_data.get("displayName", user_data.get("username", "?"))
-        except requests.RequestException as e:
-            return ConnectionCheckResult(
-                service_id="confluence", provider="rest",
-                status="FAIL", stage="auth_check",
-                safe_message=f"Нет соединения: {str(e)[:200]}",
-                endpoint_or_command=f"{base_url_val}/rest/api/user/current")
+                    safe_message=f"Нет соединения: {str(e)[:200]}",
+                    endpoint_or_command=f"{base_url}/rest/api/user/current")
 
-        # Stage 2: space check
-        if space_key_val:
-            try:
-                r = requests.get(f"{base_url_val}/rest/api/space/{space_key_val}",
-                                 headers=headers, timeout=15)
-                if r.status_code != 200:
+            if space_key:
+                try:
+                    r = requests.get(f"{base_url}/rest/api/space/{space_key}",
+                                     headers=headers, timeout=15)
+                    if r.status_code != 200:
+                        return ConnectionCheckResult(
+                            service_id="confluence", provider="rest",
+                            status="FAIL", stage="space_check",
+                            safe_message=f"Пространство '{space_key}' не найдено (HTTP {r.status_code})",
+                            http_status=r.status_code,
+                            endpoint_or_command=f"{base_url}/rest/api/space/{space_key}")
+                except requests.RequestException as e:
                     return ConnectionCheckResult(
                         service_id="confluence", provider="rest",
                         status="FAIL", stage="space_check",
-                        safe_message=f"Пространство '{space_key_val}' не найдено (HTTP {r.status_code})",
-                        http_status=r.status_code,
-                        endpoint_or_command=f"{base_url_val}/rest/api/space/{space_key_val}")
-            except requests.RequestException as e:
-                return ConnectionCheckResult(
-                    service_id="confluence", provider="rest",
-                    status="FAIL", stage="space_check",
-                    safe_message=f"Ошибка проверки пространства: {str(e)[:200]}")
+                        safe_message=f"Ошибка проверки пространства: {str(e)[:200]}")
 
-        # Stage 3: parent page check
-        if parent_id_val:
-            try:
-                r = requests.get(f"{base_url_val}/rest/api/content/{parent_id_val}",
-                                 headers=headers, timeout=15)
-                if r.status_code != 200:
+            if parent_id:
+                try:
+                    r = requests.get(f"{base_url}/rest/api/content/{parent_id}",
+                                     headers=headers, timeout=15)
+                    if r.status_code != 200:
+                        return ConnectionCheckResult(
+                            service_id="confluence", provider="rest",
+                            status="FAIL", stage="parent_check",
+                            safe_message=f"Родительская страница '{parent_id}' не найдена (HTTP {r.status_code})",
+                            http_status=r.status_code,
+                            endpoint_or_command=f"{base_url}/rest/api/content/{parent_id}")
+                except requests.RequestException as e:
                     return ConnectionCheckResult(
                         service_id="confluence", provider="rest",
                         status="FAIL", stage="parent_check",
-                        safe_message=f"Родительская страница '{parent_id_val}' не найдена (HTTP {r.status_code})",
-                        http_status=r.status_code,
-                        endpoint_or_command=f"{base_url_val}/rest/api/content/{parent_id_val}")
-            except requests.RequestException as e:
-                return ConnectionCheckResult(
-                    service_id="confluence", provider="rest",
-                    status="FAIL", stage="parent_check",
-                    safe_message=f"Ошибка проверки родительской страницы: {str(e)[:200]}")
+                        safe_message=f"Ошибка проверки родительской страницы: {str(e)[:200]}")
 
-        latency = (datetime.now(UTC) - start).total_seconds()
-        parent_info = f", родительская: {parent_title_val or parent_id_val}" if parent_id_val else ""
-        return ConnectionCheckResult(
-            service_id="confluence", provider="rest",
-            status="PASS", stage="all",
-            safe_message=f"OK — пользователь {user_display}, пространство {space_key_val}{parent_info}",
-            latency_seconds=latency,
-            endpoint_or_command=base_url_val)
+            latency = (datetime.now(UTC) - start).total_seconds()
+            parent_info = f", родительская: {parent_title or parent_id}" if parent_id else ""
+            return ConnectionCheckResult(
+                service_id="confluence", provider="rest",
+                status="PASS", stage="all",
+                safe_message=f"OK — пользователь {user_display}, пространство {space_key}{parent_info}",
+                latency_seconds=latency,
+                endpoint_or_command=base_url)
+
+        return check_confluence(base_url_val, token_val, space_key_val, parent_id_val, parent_title_val)
 
     def _check_telegram_impl(self):
         provider = self._get_provider("telegram")
@@ -840,6 +974,7 @@ class SettingsFrame(ttk.Frame):
         if provider == "mock":
             return make_mock_result("telegram")
 
+        # Create snapshot in UI thread
         entries = self._block_entries.get("telegram", {})
         bot_token_w = entries.get("bot_token")
         chat_id_w = entries.get("chat_id")
@@ -851,49 +986,51 @@ class SettingsFrame(ttk.Frame):
         if not chat_id:
             return make_not_configured_result("telegram", ["Chat ID"])
 
-        start = datetime.now(UTC)
+        # Worker uses snapshot only
+        def check_telegram(bot_token, chat_id):
+            start = datetime.now(UTC)
 
-        # Stage 1: getMe
-        try:
-            r = requests.get(f"https://api.telegram.org/bot{bot_token}/getMe", timeout=10)
-            if r.status_code != 200 or not r.json().get("ok"):
+            try:
+                r = requests.get(f"https://api.telegram.org/bot{bot_token}/getMe", timeout=10)
+                if r.status_code != 200 or not r.json().get("ok"):
+                    return ConnectionCheckResult(
+                        service_id="telegram", provider="real",
+                        status="FAIL", stage="getMe",
+                        safe_message=f"Ошибка getMe: HTTP {r.status_code}",
+                        http_status=r.status_code,
+                        endpoint_or_command="api.telegram.org/getMe")
+                bot_name = r.json().get("result", {}).get("username", "?")
+            except requests.RequestException as e:
                 return ConnectionCheckResult(
                     service_id="telegram", provider="real",
                     status="FAIL", stage="getMe",
-                    safe_message=f"Ошибка getMe: HTTP {r.status_code}",
-                    http_status=r.status_code,
-                    endpoint_or_command="api.telegram.org/getMe")
-            bot_name = r.json().get("result", {}).get("username", "?")
-        except requests.RequestException as e:
-            return ConnectionCheckResult(
-                service_id="telegram", provider="real",
-                status="FAIL", stage="getMe",
-                safe_message=f"Нет соединения с Telegram API: {str(e)[:200]}")
+                    safe_message=f"Нет соединения с Telegram API: {str(e)[:200]}")
 
-        # Stage 2: getChat
-        try:
-            r = requests.get(f"https://api.telegram.org/bot{bot_token}/getChat?chat_id={chat_id}", timeout=10)
-            if r.status_code != 200 or not r.json().get("ok"):
+            try:
+                r = requests.get(f"https://api.telegram.org/bot{bot_token}/getChat?chat_id={chat_id}", timeout=10)
+                if r.status_code != 200 or not r.json().get("ok"):
+                    return ConnectionCheckResult(
+                        service_id="telegram", provider="real",
+                        status="FAIL", stage="getChat",
+                        safe_message=f"Ошибка getChat: chat_id={chat_id}, HTTP {r.status_code}",
+                        http_status=r.status_code)
+                chat_info = r.json().get("result", {})
+                chat_title = chat_info.get("title") or chat_info.get("first_name", chat_id)
+            except requests.RequestException as e:
                 return ConnectionCheckResult(
                     service_id="telegram", provider="real",
                     status="FAIL", stage="getChat",
-                    safe_message=f"Ошибка getChat: chat_id={chat_id}, HTTP {r.status_code}",
-                    http_status=r.status_code)
-            chat_info = r.json().get("result", {})
-            chat_title = chat_info.get("title") or chat_info.get("first_name", chat_id)
-        except requests.RequestException as e:
+                    safe_message=f"Ошибка getChat: {str(e)[:200]}")
+
+            latency = (datetime.now(UTC) - start).total_seconds()
             return ConnectionCheckResult(
                 service_id="telegram", provider="real",
-                status="FAIL", stage="getChat",
-                safe_message=f"Ошибка getChat: {str(e)[:200]}")
+                status="PASS", stage="all",
+                safe_message=f"OK — бот @{bot_name}, чат «{chat_title}»",
+                latency_seconds=latency,
+                endpoint_or_command="api.telegram.org")
 
-        latency = (datetime.now(UTC) - start).total_seconds()
-        return ConnectionCheckResult(
-            service_id="telegram", provider="real",
-            status="PASS", stage="all",
-            safe_message=f"OK — бот @{bot_name}, чат «{chat_title}»",
-            latency_seconds=latency,
-            endpoint_or_command="api.telegram.org")
+        return check_telegram(bot_token, chat_id)
 
     def _check_llm_impl(self):
         provider = self._llm_provider_var.get()
@@ -902,10 +1039,11 @@ class SettingsFrame(ttk.Frame):
             return self._last_results["llm"]
 
         if provider == "onebit_newton_cli":
-            path = self._get_cli_path()
-            token = self._get_onebit_token()
-            model = self._get_onebit_model()
-            timeout = self._get_onebit_timeout()
+            snap = self._snapshot_newton()
+            path = snap.cli_path
+            token = snap.token
+            model = self._get_newton_model()
+            timeout = snap.timeout_seconds
 
             if not path:
                 return make_not_configured_result("llm", ["CLI path"])
@@ -914,8 +1052,13 @@ class SettingsFrame(ttk.Frame):
 
             from services.process_runner import run_process
 
+            def build_args(path, subcommand):
+                if path.endswith(".cmd") or path.endswith(".bat"):
+                    return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", path, subcommand]
+                return [path, subcommand]
+
             # version check
-            rv = run_process(self._build_cli_args("version"), timeout_seconds=15)
+            rv = run_process(build_args(path, "version"), timeout_seconds=15)
             if rv.returncode != 0:
                 self._last_results["llm"] = ConnectionCheckResult(
                     service_id="llm", provider="onebit_newton_cli",
@@ -925,7 +1068,7 @@ class SettingsFrame(ttk.Frame):
                 return self._last_results["llm"]
 
             # health check
-            rh = run_process(self._build_cli_args("health"), timeout_seconds=15)
+            rh = run_process(build_args(path, "health"), timeout_seconds=15)
             if rh.returncode != 0:
                 self._last_results["llm"] = ConnectionCheckResult(
                     service_id="llm", provider="onebit_newton_cli",
@@ -1029,13 +1172,10 @@ class SettingsFrame(ttk.Frame):
                 self._last_results["llm"] = result
                 return result
 
-    # ── Test button callbacks (receive btn + status_label from _build_block) ──
+    # ── Test button callbacks ──
 
     def _test_bitlink(self):
         return self._check_bitlink_impl()
-
-    def _test_newton(self):
-        return self._check_newton_impl()
 
     def _test_confluence(self):
         return self._check_confluence_impl()
@@ -1076,7 +1216,8 @@ class SettingsFrame(ttk.Frame):
 
         service_map = [
             ("bitlink", "БИТ.Link", self._check_bitlink_impl),
-            ("newton", "Newton — транскрибация видео", self._check_newton_impl),
+            ("newton", "БИТ Ньютон CLI", self._check_newton_cli_for_all),
+            ("transcription", "Транскрибация", self._check_transcription_for_all),
             ("confluence", "Confluence", self._check_confluence_impl),
             ("telegram", "Telegram", self._check_telegram_impl),
             ("llm", "Нейросеть / LLM", self._check_llm_impl),
@@ -1115,6 +1256,49 @@ class SettingsFrame(ttk.Frame):
 
         self._runner.start_check("check_all", runner,
                                   lambda cid, r: None)
+
+    def _check_newton_cli_for_all(self):
+        path = self._get_newton_cli_path()
+        if not path:
+            return ConnectionCheckResult(
+                service_id="newton", provider="onebit_newton_cli",
+                status="NOT_CONFIGURED", stage="config",
+                safe_message="CLI path не указан")
+        if not os.path.isfile(path):
+            return ConnectionCheckResult(
+                service_id="newton", provider="onebit_newton_cli",
+                status="FAIL", stage="config",
+                safe_message=f"CLI файл не найден: {path}")
+
+        snap = self._snapshot_newton()
+        from services.process_runner import run_process
+
+        def build_args(path, subcommand):
+            if path.endswith(".cmd") or path.endswith(".bat"):
+                return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", path, subcommand]
+            return [path, subcommand]
+
+        rv = run_process(build_args(path, "version"), timeout_seconds=15)
+        if rv.returncode != 0:
+            return ConnectionCheckResult(
+                service_id="newton", provider="onebit_newton_cli",
+                status="FAIL", stage="version",
+                safe_message=f"CLI exit {rv.returncode}",
+                exit_code=rv.returncode)
+
+        token = snap.token
+        return ConnectionCheckResult(
+            service_id="newton", provider="onebit_newton_cli",
+            status="PASS", stage="cli_available",
+            safe_message=f"Newton CLI доступен (token: {'задан' if token else 'не задан'})")
+
+    def _check_transcription_for_all(self):
+        provider = self._transcription_provider_var.get()
+        if provider in ("disabled", "mock"):
+            return make_mock_result("transcription") if provider == "mock" else ConnectionCheckResult(
+                service_id="transcription", provider="disabled", status="SKIPPED",
+                stage="provider_check", safe_message="Сервис отключён")
+        return make_mock_result("transcription")
 
     def _copy_report(self, tree):
         lines = ["=== Отчёт о проверке подключений ==="]
@@ -1156,7 +1340,6 @@ class SettingsFrame(ttk.Frame):
         load_dotenv(self.env_path)
         settings_map = {
             "bitlink": {"email": "BITLINK_EMAIL", "password": "BITLINK_PASSWORD"},
-            "newton": {"token": "NEWTON_TOKEN", "path": "NEWTON_PATH", "base_url": "NEWTON_BASE_URL"},
             "confluence": {
                 "token": "CONFLUENCE_TOKEN", "base_url": "CONFLUENCE_BASE_URL",
                 "space_key": "CONFLUENCE_SPACE_KEY", "parent_page_id": "CONFLUENCE_PARENT_PAGE_ID",
@@ -1176,19 +1359,30 @@ class SettingsFrame(ttk.Frame):
         self._mode_var.set(os.getenv("PROTOCOL_MODE", "auto"))
         self._continue_var.set(os.getenv("BATCH_CONTINUE_AFTER_ERROR", "true").lower() in ("true", "1", "yes"))
 
+        # Newton CLI block
+        onebit_token = os.getenv("ONEBIT_NEWTON_TOKEN", "") or os.getenv("ONEBIT_LLM_TOKEN", "") or os.getenv("NEWTON_TOKEN", "")
+        self._newton_token_entry.delete(0, tk.END)
+        self._newton_token_entry.insert(0, onebit_token)
+
+        self._newton_cli_path_entry.delete(0, tk.END)
+        self._newton_cli_path_entry.insert(0, os.getenv(
+            "ONEBIT_NEWTON_CLI_PATH", "") or os.getenv(
+            "ONEBIT_CLI_PATH", r"C:\Users\egore\AppData\Local\NewtonCLI\newton.cmd"))
+        self._newton_transport_var.set(os.getenv("ONEBIT_NEWTON_TRANSPORT", "native"))
+        self._newton_timeout_entry.delete(0, tk.END)
+        self._newton_timeout_entry.insert(0, os.getenv("ONEBIT_NEWTON_TIMEOUT_SECONDS", "120"))
+        self._newton_encoding_var.set(os.getenv("ONEBIT_NEWTON_OUTPUT_ENCODING", "auto"))
+
+        # Transcription
+        self._transcription_provider_var.set(
+            os.getenv("TRANSCRIPTION_PROVIDER", "mock"))
+        self._transcription_engine_var.set(os.getenv("TRANSCRIPTION_ENGINE", "v3"))
+
+        # LLM block
         provider = os.getenv("LLM_PROVIDER", "onebit_newton_cli")
         self._llm_provider_var.set(provider)
 
-        onebit_token = os.getenv("ONEBIT_LLM_TOKEN", "") or os.getenv("NEWTON_TOKEN", "")
-        self._llm_onebit_token_entry.delete(0, tk.END)
-        self._llm_onebit_token_entry.insert(0, onebit_token)
-
-        self._llm_onebit_cli_path_entry.delete(0, tk.END)
-        self._llm_onebit_cli_path_entry.insert(0, os.getenv(
-            "ONEBIT_CLI_PATH", r"C:\Users\egore\AppData\Local\NewtonCLI\newton.cmd"))
         self._llm_onebit_model_var.set(os.getenv("LLM_MODEL", "gpt4"))
-        self._llm_onebit_timeout_entry.delete(0, tk.END)
-        self._llm_onebit_timeout_entry.insert(0, os.getenv("ONEBIT_CLI_TIMEOUT_SECONDS", "120"))
 
         self._llm_openai_url_entry.delete(0, tk.END)
         self._llm_openai_url_entry.insert(0, os.getenv("LLM_API_URL", ""))
@@ -1200,7 +1394,6 @@ class SettingsFrame(ttk.Frame):
         # Load provider modes
         provider_modes = {
             "bitlink": ("BITLINK_PROVIDER", "mock"),
-            "newton": ("NEWTON_PROVIDER", "mock"),
             "confluence": ("CONFLUENCE_PROVIDER", "rest"),
             "telegram": ("TELEGRAM_PROVIDER", "mock"),
         }
@@ -1213,16 +1406,12 @@ class SettingsFrame(ttk.Frame):
 
     def _save_settings(self):
         bitlink_e = self._block_entries.get("bitlink", {})
-        newton_e = self._block_entries.get("newton", {})
         confluence_e = self._block_entries.get("confluence", {})
         telegram_e = self._block_entries.get("telegram", {})
 
         env_map = {
             "BITLINK_EMAIL": bitlink_e.get("email", tk.Entry()).get(),
             "BITLINK_PASSWORD": bitlink_e.get("password", tk.Entry()).get(),
-            "NEWTON_TOKEN": newton_e.get("token", tk.Entry()).get(),
-            "NEWTON_PATH": newton_e.get("path", tk.Entry()).get(),
-            "NEWTON_BASE_URL": newton_e.get("base_url", tk.Entry()).get(),
             "CONFLUENCE_TOKEN": confluence_e.get("token", tk.Entry()).get(),
             "CONFLUENCE_BASE_URL": confluence_e.get("base_url", tk.Entry()).get(),
             "CONFLUENCE_SPACE_KEY": confluence_e.get("space_key", tk.Entry()).get(),
@@ -1238,17 +1427,24 @@ class SettingsFrame(ttk.Frame):
         }
 
         # Save provider modes
-        for check_id in ["bitlink", "newton", "confluence", "telegram"]:
+        for check_id in ["bitlink", "confluence", "telegram"]:
             provider_var = getattr(self, f"_{check_id}_provider_var", None)
             if provider_var:
                 env_map[f"{check_id.upper()}_PROVIDER"] = provider_var.get()
 
+        # Newton CLI block
+        env_map["ONEBIT_NEWTON_TOKEN"] = self._get_newton_token()
+        env_map["ONEBIT_NEWTON_CLI_PATH"] = self._get_newton_cli_path()
+        env_map["ONEBIT_NEWTON_TRANSPORT"] = self._get_newton_transport()
+        env_map["ONEBIT_NEWTON_TIMEOUT_SECONDS"] = str(self._get_newton_timeout())
+        env_map["ONEBIT_NEWTON_OUTPUT_ENCODING"] = self._get_newton_encoding()
+
+        # Transcription
+        env_map["TRANSCRIPTION_PROVIDER"] = self._transcription_provider_var.get()
+        env_map["TRANSCRIPTION_ENGINE"] = self._transcription_engine_var.get()
+
         provider = self._llm_provider_var.get()
         if provider == "onebit_newton_cli":
-            env_map["ONEBIT_LLM_TOKEN"] = self._llm_onebit_token_entry.get().strip()
-            env_map["ONEBIT_CLI_PATH"] = self._llm_onebit_cli_path_entry.get().strip()
-            env_map["ONEBIT_CLI_TRANSPORT"] = "native"
-            env_map["ONEBIT_CLI_TIMEOUT_SECONDS"] = self._llm_onebit_timeout_entry.get().strip()
             env_map["LLM_MODEL"] = self._llm_onebit_model_var.get()
         elif provider == "openai_compatible":
             env_map["LLM_API_URL"] = self._llm_openai_url_entry.get().strip()

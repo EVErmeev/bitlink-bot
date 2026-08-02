@@ -9,6 +9,7 @@ class ConnectionCheckRunner:
         self._result_queue = queue.Queue()
         self._running = {}
         self._polling = False
+        self._callbacks = {}  # check_id → callback
 
     def start_check(self, check_id, worker_fn, on_complete):
         if check_id in self._running and self._running[check_id]:
@@ -24,7 +25,7 @@ class ConnectionCheckRunner:
             finally:
                 self._result_queue.put((check_id, result))
 
-        self._on_complete = on_complete
+        self._callbacks[check_id] = on_complete
         threading.Thread(target=runner, daemon=True).start()
         if not self._polling:
             self._start_polling()
@@ -39,8 +40,9 @@ class ConnectionCheckRunner:
             while True:
                 check_id, result = self._result_queue.get_nowait()
                 self._running[check_id] = False
-                if hasattr(self, '_on_complete'):
-                    self._on_complete(check_id, result)
+                cb = self._callbacks.pop(check_id, None)
+                if cb:
+                    cb(check_id, result)
         except queue.Empty:
             pass
 

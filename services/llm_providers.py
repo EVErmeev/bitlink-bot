@@ -226,3 +226,58 @@ class OneBitNewtonCLIProvider:
                 _os.unlink(output_path)
             except OSError:
                 pass
+
+
+class OneBitNewtonTranscriptionProvider:
+    def __init__(self, config=None):
+        if config is None:
+            from services.runtime_config import RuntimeConfig
+            config = RuntimeConfig().get_onebit_config()
+        self.config = config
+
+    def check_connection(self) -> ConnectionCheckResult:
+        from services.process_runner import run_process
+        r = run_process(
+            [self.config.cli_path, "transcribe", "--help"],
+            timeout_seconds=15,
+            secret_values=[self.config.token] if self.config.token else None,
+        )
+        if r.returncode == 0:
+            return ConnectionCheckResult(
+                ok=True, stage="cli_available",
+                safe_message="Newton CLI доступен для транскрибации",
+            )
+        return ConnectionCheckResult(
+            ok=False, stage="cli_error",
+            safe_message=f"CLI error: {r.stderr[:200]}",
+        )
+
+    def transcribe(self, audio_path: str, output_dir: str = "", engine: str = "v3") -> str:
+        import os as _os
+        import tempfile
+
+        if not self.config.token:
+            raise OneBitProviderError(stage="config", code="NO_TOKEN",
+                safe_message="Токен не указан")
+
+        fd, out = tempfile.mkstemp(suffix=".txt", prefix="newton_trans_")
+        _os.close(fd)
+        try:
+            env = _os.environ.copy()
+            env["NEWTON_TOKEN"] = self.config.token
+            from services.process_runner import run_process
+            r = run_process(
+                [self.config.cli_path, "transcribe", str(audio_path), "--engine", engine, "--output", out],
+                env=env, timeout_seconds=self.config.timeout_seconds,
+                secret_values=[self.config.token] if self.config.token else None,
+            )
+            if r.returncode != 0:
+                raise RuntimeError(f"Transcription failed: {r.stderr[:300]}")
+            if not _os.path.exists(out) or _os.path.getsize(out) == 0:
+                raise RuntimeError("Transcription produced no output")
+            return open(out, encoding="utf-8").read()
+        finally:
+            try:
+                _os.unlink(out)
+            except OSError:
+                pass

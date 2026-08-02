@@ -85,8 +85,8 @@ def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list
             elif not Path(config.onebit_cli_path).exists():
                 errors.append(f"{item.display_name}: Newton CLI не найден: {config.onebit_cli_path}")
                 blocking = True
-            if not config.onebit_llm_token:
-                errors.append(f"{item.display_name}: NEWTON_TOKEN не указан")
+            if not config.onebit_token:
+                errors.append(f"{item.display_name}: ONEBIT_NEWTON_TOKEN не указан")
                 blocking = True
         elif config.llm_provider == "openai_compatible":
             if not config.llm_api_url or not config.llm_api_key:
@@ -94,22 +94,22 @@ def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list
                 blocking = True
 
         # Confluence only if not dry-run
-        if not item.dry_run and config.confluence_mode != "mock":
+        if not item.dry_run and config.confluence_provider != "mock":
             if not config.confluence_base_url or not config.confluence_token:
                 errors.append(f"{item.display_name}: Confluence REST требует BASE_URL и TOKEN")
                 blocking = True
             elif not config.confluence_parent_page_id:
                 warnings.append(f"{item.display_name}: parent_page_id не указан")
         # Telegram only if send_telegram
-        if item.send_telegram and config.telegram_mode == "real":
+        if item.send_telegram and config.telegram_provider == "real":
             if not config.telegram_bot_token or not config.telegram_chat_id:
                 warnings.append(f"{item.display_name}: Telegram real-режим без токена/chat_id")
 
     elif st == "local_video":
-        if config.newton_mode == "mock":
-            warnings.append(f"{item.display_name}: Newton в mock-режиме")
-        elif config.newton_mode in ("disabled", "http_api"):
-            errors.append(f"{item.display_name}: Newton ({config.newton_mode}) — видео не может быть обработано")
+        if config.transcription_provider == "mock":
+            warnings.append(f"{item.display_name}: Транскрибация в mock-режиме")
+        elif config.transcription_provider in ("disabled",):
+            errors.append(f"{item.display_name}: Транскрибация ({config.transcription_provider}) — видео не может быть обработано")
             blocking = True
 
         # LLM provider-specific checks
@@ -122,8 +122,8 @@ def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list
             elif not Path(config.onebit_cli_path).exists():
                 errors.append(f"{item.display_name}: Newton CLI не найден: {config.onebit_cli_path}")
                 blocking = True
-            if not config.onebit_llm_token:
-                errors.append(f"{item.display_name}: NEWTON_TOKEN не указан")
+            if not config.onebit_token:
+                errors.append(f"{item.display_name}: ONEBIT_NEWTON_TOKEN не указан")
                 blocking = True
         elif config.llm_provider == "openai_compatible":
             if not config.llm_api_url or not config.llm_api_key:
@@ -131,27 +131,27 @@ def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list
                 blocking = True
 
         # Confluence same as transcript
-        if not item.dry_run and config.confluence_mode != "mock":
+        if not item.dry_run and config.confluence_provider != "mock":
             if not config.confluence_base_url or not config.confluence_token:
                 errors.append(f"{item.display_name}: Confluence REST требует BASE_URL и TOKEN")
                 blocking = True
             elif not config.confluence_parent_page_id:
                 warnings.append(f"{item.display_name}: parent_page_id не указан")
         # Telegram same as transcript
-        if item.send_telegram and config.telegram_mode == "real":
+        if item.send_telegram and config.telegram_provider == "real":
             if not config.telegram_bot_token or not config.telegram_chat_id:
                 warnings.append(f"{item.display_name}: Telegram real-режим без токена/chat_id")
 
     elif st == "bitlink":
-        if config.bitlink_mode == "mock":
+        if config.bitlink_provider == "mock":
             warnings.append(f"{item.display_name}: BIT.Link в mock-режиме")
-        elif config.bitlink_mode == "real":
+        elif config.bitlink_provider == "real":
             if not config.bitlink_base_url:
                 errors.append(f"{item.display_name}: BIT.Link real требует BASE_URL")
                 blocking = True
-        # Newton required for bitlink transcript
-        if config.newton_mode in ("disabled", "http_api"):
-            warnings.append(f"{item.display_name}: Newton ({config.newton_mode}) — транскрибация может быть недоступна")
+        # Transcription required for bitlink transcript
+        if config.transcription_provider in ("disabled",):
+            warnings.append(f"{item.display_name}: Транскрибация ({config.transcription_provider}) — транскрибация может быть недоступна")
 
     # Mixed mode protection
     if config.is_demo_for_source(item.source_type) and not item.dry_run:
