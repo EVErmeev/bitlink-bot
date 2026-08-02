@@ -162,12 +162,17 @@ class OneBitNewtonCLIProvider:
             base = self._bnc(self.cli_path)
             args = base + ["summarize", "-", "--model", mdl, "--output", output_path]
             if system_prompt:
-                args += ["--system-prompt", system_prompt[:4000]]
+                # Clean surrogates that break json.dumps in CLI
+                clean_sp = system_prompt.encode("utf-8", errors="replace").decode("utf-8")
+                args += ["--system-prompt", clean_sp[:4000]]
 
             env = _os.environ.copy()
             env["NEWTON_TOKEN"] = self.token
 
-            proc_result = run_process(args, input_text=user_prompt, env=env,
+            # Clean user_prompt from surrogates too
+            clean_up = user_prompt.encode("utf-8", errors="replace").decode("utf-8")
+
+            proc_result = run_process(args, input_text=clean_up, env=env,
                                      timeout_seconds=self.timeout_seconds,
                                      secret_values=[self.token])
 
