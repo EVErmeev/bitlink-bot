@@ -226,17 +226,17 @@ class ProcessingService:
                         if item.send_telegram and self.config.telegram_provider not in ("disabled", "mock"):
                             self._report_progress("sending_telegram", 95, item)
                             tg_ok, tg_msg_id = self._send_telegram_protocol(protocol, result_url, item)
-if tg_ok:
-                item.status_message = (item.status_message or "") + " | Telegram: отправлен"
-                if item.debug_directory:
-                    try:
-                        with open(item.debug_directory / "pipeline_result.json", "r", encoding="utf-8") as f:
-                            pr = _json.load(f)
-                        pr["telegram_message_id"] = tg_msg_id
-                        with open(item.debug_directory / "pipeline_result.json", "w", encoding="utf-8") as f:
-                            _json.dump(pr, f, indent=2, ensure_ascii=False)
-                    except Exception:
-                        pass
+                            if tg_ok:
+                                item.status_message = (item.status_message or "") + " | Telegram: отправлен"
+                                if item.debug_directory:
+                                    try:
+                                        with open(item.debug_directory / "pipeline_result.json", encoding="utf-8") as f:
+                                            pr = _json.load(f)
+                                        pr["telegram_message_id"] = tg_msg_id
+                                        with open(item.debug_directory / "pipeline_result.json", "w", encoding="utf-8") as f:
+                                            _json.dump(pr, f, indent=2, ensure_ascii=False)
+                                    except Exception:
+                                        pass
                             else:
                                 item.status = "notification_failed"
                                 item.status_message = (item.status_message or "") + " | Telegram: ошибка отправки"
