@@ -63,3 +63,19 @@ def make_error_result(service_id: str, error: str) -> ConnectionCheckResult:
     return ConnectionCheckResult(service_id=service_id, provider="unknown", status="FAIL",
         stage="internal_error", safe_message=str(error)[:300],
         recommendation="Проверьте настройки и повторите.")
+
+
+@dataclass(frozen=True)
+class ConnectionCheckInput:
+    service_id: str = ""
+    provider: str = "mock"
+    base_url: str = ""
+    token: str = ""
+    space_key: str = ""
+    parent_page_id: str = ""
+    parent_page_title: str = ""
+    chat_id: str = ""
+    cli_path: str = ""
+    model: str = ""
+    timeout_seconds: int = 30
+    output_encoding: str = "auto"

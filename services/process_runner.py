@@ -15,7 +15,30 @@ class ProcessExecutionResult:
     stderr: str = ""
     stdout_encoding: str = ""
     stderr_encoding: str = ""
+    stdout_decode_score: float = 0.0
+    stderr_decode_score: float = 0.0
     duration_seconds: float = 0.0
+
+
+def _score_decoded_text(text: str) -> float:
+    """Score decoded text. Higher = more likely to be correct."""
+    if not text:
+        return 0.0
+    score = 0.0
+    russian_range = sum(1 for c in text if '\u0400' <= c <= '\u04FF')
+    score += russian_range * 2
+    russian_words = ['транскрибация', 'модель', 'сервис', 'здоров', 'healthy', 'статус',
+                     'версия', 'язык', 'русский', 'суммаризация', 'синтез', 'задача']
+    for w in russian_words:
+        if w in text.lower():
+            score += 10
+    box_chars = sum(1 for c in text if '\u2500' <= c <= '\u257F')
+    score -= box_chars * 3
+    control_chars = sum(1 for c in text if ord(c) < 32 and c not in '\n\r\t')
+    score -= control_chars * 5
+    replacement = text.count('\ufffd')
+    score -= replacement * 10
+    return score
 
 
 def _get_windows_console_codepages() -> list[str]:
@@ -38,53 +61,68 @@ def _get_windows_console_codepages() -> list[str]:
 
 
 def decode_process_output(data: bytes | None, *,
-                          preferred_encoding: str | None = None) -> tuple[str, str]:
-    """Decode binary CLI output. Returns (text, encoding_name). Never raises."""
+                          preferred_encoding: str | None = None) -> tuple[str, str, float]:
+    """Decode binary CLI output. Returns (text, encoding_name, score). Never raises."""
     if not data:
-        return "", "empty"
+        return "", "empty", 0.0
 
     if preferred_encoding and preferred_encoding != "auto":
         try:
-            return data.decode(preferred_encoding), preferred_encoding
+            text = data.decode(preferred_encoding)
+            s = _score_decoded_text(text)
+            return text, preferred_encoding, s
         except (UnicodeDecodeError, LookupError):
             pass
 
     # Try strict UTF-8 first (with BOM)
     if data[:3] == b"\xef\xbb\xbf":
         try:
-            return data.decode("utf-8-sig"), "utf-8-sig"
+            text = data.decode("utf-8-sig")
+            s = _score_decoded_text(text)
+            return text, "utf-8-sig", s
         except UnicodeDecodeError:
             pass
 
     try:
-        return data.decode("utf-8"), "utf-8"
+        text = data.decode("utf-8")
+        s = _score_decoded_text(text)
+        return text, "utf-8", s
     except UnicodeDecodeError:
         pass
 
-    # Try Windows code pages
+    # Try Windows code pages with scoring
+    best_text = ""
+    best_score = -999.0
+    best_cp = ""
+
     for cp in _get_windows_console_codepages() + ["cp866", "cp1251"]:
         try:
             text = data.decode(cp)
-            # Score: penalize replacement chars (U+FFFD)
-            replacement_count = text.count("\ufffd")
-            if replacement_count == 0:
-                return text, cp
-            if replacement_count < len(data) * 0.1:
-                return text.replace("\ufffd", "?"), cp
+            s = _score_decoded_text(text)
+            if s > best_score:
+                best_score = s
+                best_text = text
+                best_cp = cp
         except (UnicodeDecodeError, LookupError):
             pass
+
+    if best_text:
+        return best_text, best_cp, best_score
 
     # Try locale encoding
     try:
         enc = locale.getpreferredencoding(False)
         if enc.lower() not in ("utf-8", "utf8"):
             text = data.decode(enc, errors="replace")
-            return text, enc
+            s = _score_decoded_text(text)
+            return text, enc, s
     except Exception:
         pass
 
     # Last resort
-    return data.decode("utf-8", errors="replace"), "utf-8(replace)"
+    text = data.decode("utf-8", errors="replace")
+    s = _score_decoded_text(text)
+    return text, "utf-8(replace)", s
 
 
 def safe_excerpt(value: str | None, limit: int = 300) -> str:
@@ -132,9 +170,9 @@ def run_process(args: list[str], *,
             env=env,
         )
         result.returncode = proc.returncode
-        result.stdout, result.stdout_encoding = decode_process_output(
+        result.stdout, result.stdout_encoding, result.stdout_decode_score = decode_process_output(
             proc.stdout, preferred_encoding=preferred_encoding)
-        result.stderr, result.stderr_encoding = decode_process_output(
+        result.stderr, result.stderr_encoding, result.stderr_decode_score = decode_process_output(
             proc.stderr, preferred_encoding=preferred_encoding)
 
         if secret_values:
