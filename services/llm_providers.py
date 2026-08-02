@@ -173,16 +173,25 @@ class OneBitNewtonCLIProvider:
 
             if proc_result.returncode != 0:
                 auth_code, auth_msg = classify_auth_error(proc_result.stderr, proc_result.returncode)
+                full_stderr = proc_result.stderr[:2000]
+                # Save full stderr to debug
+                try:
+                    import os as _os
+                    _os.makedirs("debug/cli_errors", exist_ok=True)
+                    _ts = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+                    with open(f"debug/cli_errors/summarize_{_ts}.log", "w", encoding="utf-8") as _f:
+                        _f.write(f"EXIT: {proc_result.returncode}\nARGS: {args}\nSTDERR:\n{full_stderr}\nSTDOUT:\n{proc_result.stdout[:500]}")
+                except Exception: pass
                 if auth_code:
                     raise OneBitProviderError(stage="cli_execution", code=auth_code,
                         safe_message=auth_msg, exit_code=proc_result.returncode,
-                        safe_stderr=proc_result.stderr[:300],
+                        safe_stderr=full_stderr,
                         stderr_encoding=proc_result.stderr_encoding,
                         duration_seconds=proc_result.duration_seconds)
                 raise OneBitProviderError(stage="cli_execution", code="CLI_NONZERO_EXIT",
-                    safe_message=f"Newton CLI завершился с кодом {proc_result.returncode}: {proc_result.stderr[:200]}",
+                    safe_message=f"Newton CLI exit {proc_result.returncode}: {full_stderr[:500]}",
                     exit_code=proc_result.returncode,
-                    safe_stderr=proc_result.stderr[:300],
+                    safe_stderr=full_stderr,
                     stderr_encoding=proc_result.stderr_encoding,
                     duration_seconds=proc_result.duration_seconds)
 
