@@ -53,8 +53,9 @@ class TranscriptionClient:
         output_dir.mkdir(parents=True, exist_ok=True)
         out_file = output_dir / f"{video_path.stem}_transcript.txt"
 
-        env = os.environ.copy()
-        env["NEWTON_TOKEN"] = self.token
+env = os.environ.copy()
+            env["NEWTON_TOKEN"] = self.token
+            env["PYTHONIOENCODING"] = "utf-8"
         args = build_newton_command(self.cli_path, "transcribe", str(video_path),
                                     "--engine", self.engine, "--output", str(out_file))
 

@@ -168,6 +168,7 @@ class OneBitNewtonCLIProvider:
 
             env = _os.environ.copy()
             env["NEWTON_TOKEN"] = self.token
+            env["PYTHONIOENCODING"] = "utf-8"
 
             # Clean user_prompt from surrogates too
             clean_up = user_prompt.encode("utf-8", errors="replace").decode("utf-8")
@@ -277,6 +278,7 @@ class OneBitNewtonTranscriptionProvider:
         try:
             env = _os.environ.copy()
             env["NEWTON_TOKEN"] = self.config.token
+            env["PYTHONIOENCODING"] = "utf-8"
             from services.newton_cli import build_newton_command
             from services.process_runner import run_process
             args = build_newton_command(self.config.cli_path, "transcribe", str(audio_path),
