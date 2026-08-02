@@ -296,8 +296,29 @@ class ProcessingService:
 
         except Exception as e:
             item.status = "failed"
-            item.error_details = str(e)
+            import traceback
+            tb = traceback.format_exc()
+            item.error_details = f"{type(e).__name__}: {e}\n\n{tb[-1000:]}"
             result["error"] = str(e)
+
+            # Save runtime error log
+            try:
+                from pathlib import Path
+                log_dir = Path("debug") / "runtime_errors"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                log_path = log_dir / f"error_{ts}_{item.item_id[:8]}.log"
+                with open(log_path, "w", encoding="utf-8") as lf:
+                    lf.write(f"Stage: {getattr(self, '_current_stage', 'unknown')}\n")
+                    lf.write(f"Item: {item.display_name}\n")
+                    lf.write(f"Source: {item.source_type}\n")
+                    lf.write(f"Error: {e}\n\n{tb}")
+                if item.debug_directory:
+                    item.debug_directory.mkdir(parents=True, exist_ok=True)
+                    with open(item.debug_directory / "runtime_error.log", "w", encoding="utf-8") as lf:
+                        lf.write(tb)
+            except Exception:
+                pass
 
         finally:
             elapsed = (datetime.now() - start_time).total_seconds()
