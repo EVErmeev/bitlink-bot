@@ -37,15 +37,6 @@ class LocalTranscriptFrame(ttk.Frame):
 
         self.tree.bind("<Delete>", self._remove_selected)
 
-        extra_frame = ttk.Frame(self)
-        extra_frame.pack(fill=tk.X, padx=10, pady=5)
-        ttk.Label(extra_frame, text="Клиент:").pack(side=tk.LEFT, padx=(0, 5))
-        self.client_name_var = tk.StringVar()
-        ttk.Entry(extra_frame, textvariable=self.client_name_var, width=30).pack(side=tk.LEFT, padx=(0, 20))
-        ttk.Label(extra_frame, text="Проект:").pack(side=tk.LEFT, padx=(0, 5))
-        self.project_name_var = tk.StringVar()
-        ttk.Entry(extra_frame, textvariable=self.project_name_var, width=30).pack(side=tk.LEFT)
-
         btn_frame = ttk.Frame(self)
         btn_frame.pack(fill=tk.X, padx=10, pady=10)
         ttk.Button(btn_frame, text="Добавить файлы", command=self._add_files).pack(side=tk.LEFT, padx=5)
@@ -87,9 +78,6 @@ class LocalTranscriptFrame(ttk.Frame):
 
         from ui.source_queue_frame import get_queue_controller
 
-        client_name = self.client_name_var.get().strip()
-        project_name = self.project_name_var.get().strip()
-
         items = []
         for fpath in self.files:
             size_bytes = fpath.stat().st_size
@@ -106,8 +94,6 @@ class LocalTranscriptFrame(ttk.Frame):
                 word_count=wc,
                 protocol_template="project_detailed",
                 protocol_mode="auto",
-                client_name=client_name,
-                project_name=project_name,
             )
             items.append(item)
 

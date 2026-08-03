@@ -14,7 +14,15 @@ from models.protocol import (
 )
 from models.validation import ValidationReport, ValidationStatus
 from protocol_templates.base import BaseProtocolTemplate
-from services.protocol_content_utils import normalize_paragraphs, normalize_text_list
+from services.protocol_content_utils import (
+    fill_or,
+    fill_required,
+    normalize_paragraphs,
+    normalize_rich_text_blocks,
+    normalize_text_list,
+    render_rich_text_blocks,
+    split_key_outcomes_semantically,
+)
 
 
 class ProjectDetailedTemplate(BaseProtocolTemplate):
@@ -154,6 +162,19 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         dl = tb.status_deadline if tb.status_deadline else "Срок не определён"
         parts.append(f"{resp}, {dl}")
         return ". ".join(parts) if parts else ("Ответственный не определён, Срок не определён")
+
+    def _render_status_cell(self, tb: TopicBlock) -> str:
+        """Render a structured status cell (label, next actions, responsible, deadline)."""
+        label = tb.status_text or "Не определено"
+        out = [f"<p><strong>{html_mod.escape(label)}</strong></p>"]
+        if tb.status_next_action:
+            out.append("<p><strong>Следующее действие:</strong></p>")
+            out.append(render_rich_text_blocks(normalize_rich_text_blocks(tb.status_next_action)))
+        responsible = tb.status_responsible or "Не определён"
+        deadline = tb.status_deadline or "Не определён"
+        out.append(f"<p><strong>Ответственные:</strong> {html_mod.escape(responsible)}</p>")
+        out.append(f"<p><strong>Срок:</strong> {html_mod.escape(deadline)}</p>")
+        return "\n".join(o for o in out if o)
 
     # ── Keyword clustering ──────────────────────────────────────────────
 
@@ -1096,22 +1117,19 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
         topic_rows = ""
         for i, tb in enumerate(protocol.topic_blocks, 1):
-            status_str = self._build_status_string(tb)
-            discussion_parts = ""
-            if tb.discussion_content:
-                paragraphs = normalize_paragraphs(tb.discussion_content)
-                for para in paragraphs:
-                    if para.strip():
-                        discussion_parts += f"<p>{html_mod.escape(para.strip())}</p>"
-            if not discussion_parts:
-                discussion_parts = "—"
-            conclusion = tb.conclusion.replace(chr(10), "<br>") if tb.conclusion else "—"
+            discussion_html = render_rich_text_blocks(
+                normalize_rich_text_blocks(tb.discussion_content)
+            ) or "—"
+            conclusion_html = render_rich_text_blocks(
+                normalize_rich_text_blocks(tb.conclusion)
+            ) or "—"
+            status_html = self._render_status_cell(tb)
             topic_rows += f"""<tr>
 <td class=\"num\">{i}</td>
 <td class=\"topic-title\">{html_mod.escape(tb.title) or '—'}</td>
-<td class=\"discussion\">{discussion_parts}</td>
-<td class=\"conclusion\">{html_mod.escape(conclusion)}</td>
-<td class=\"status\">{html_mod.escape(status_str)}</td>
+<td class=\"discussion\">{discussion_html}</td>
+<td class=\"conclusion\">{conclusion_html}</td>
+<td class=\"status\">{status_html}</td>
 </tr>
 """
 
@@ -1119,13 +1137,7 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, d in enumerate(protocol.decisions, 1):
             decisions_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{html_mod.escape(d.decision_text or '—')}</td>
-<td>{html_mod.escape(d.context_and_basis or '—')}</td>
-<td>{html_mod.escape(d.agreed_scope or '—')}</td>
-<td>{html_mod.escape(d.boundaries or '—')}</td>
-<td>{html_mod.escape(d.responsible or '—')}</td>
-<td>{html_mod.escape(d.deadline or '—')}</td>
-<td>{html_mod.escape(d.related_topic or '—')}</td>
+<td>{html_mod.escape(fill_or(d.decision_text, '—'))}</td>
 </tr>
 """
 
@@ -1133,32 +1145,23 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, q in enumerate(protocol.questions, 1):
             questions_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{html_mod.escape(q.question_text or '—')}</td>
-<td>{html_mod.escape(q.context or '—')}</td>
-<td>{html_mod.escape(q.known_info or '—')}</td>
-<td>{html_mod.escape(q.to_determine or '—')}</td>
-<td>{html_mod.escape(q.responsible or '—')}</td>
-<td>{html_mod.escape(q.deadline or '—')}</td>
-<td>{html_mod.escape(q.next_action or '—')}</td>
-<td>{html_mod.escape(q.status or '—')}</td>
-<td>{html_mod.escape(q.related_topic or '—')}</td>
+<td>{html_mod.escape(fill_or(q.question_text, '—'))}</td>
+<td>{html_mod.escape(fill_or(q.to_determine, '—'))}</td>
+<td>{html_mod.escape(fill_required(q.responsible))}</td>
+<td>{html_mod.escape(fill_or(q.deadline, 'Не определён'))}</td>
+<td>{html_mod.escape(fill_or(q.status, 'Открыт'))}</td>
 </tr>
 """
 
         risks_rows = ""
         for i, r in enumerate(protocol.risks, 1):
+            strategy = r.measures or "Стратегия не определена; требуется отдельная проработка."
             risks_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{html_mod.escape(r.risk_type or '—')}</td>
-<td>{html_mod.escape(r.risk_text or '—')}</td>
-<td>{html_mod.escape(r.reason or '—')}</td>
-<td>{html_mod.escape(r.impact or '—')}</td>
-<td>{html_mod.escape(r.trigger_condition or '—')}</td>
-<td>{html_mod.escape(r.measures or '—')}</td>
-<td>{html_mod.escape(r.responsible or '—')}</td>
-<td>{html_mod.escape(r.deadline or '—')}</td>
-<td>{html_mod.escape(r.status or '—')}</td>
-<td>{html_mod.escape(r.related_topic or '—')}</td>
+<td>{html_mod.escape(fill_or(r.risk_type, 'Риск'))}</td>
+<td>{html_mod.escape(fill_or(r.risk_text, '—'))}</td>
+<td>{html_mod.escape(strategy)}</td>
+<td>{html_mod.escape(fill_required(r.responsible))}</td>
 </tr>
 """
 
@@ -1166,37 +1169,44 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, t in enumerate(protocol.tasks, 1):
             tasks_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{html_mod.escape(t.task_text or '—')}</td>
-<td>{html_mod.escape(t.basis or '—')}</td>
-<td>{html_mod.escape(t.expected_result or '—')}</td>
-<td>{html_mod.escape(t.responsible or '—')}</td>
-<td>{html_mod.escape(t.co_executors or '—')}</td>
-<td>{html_mod.escape(t.deadline or '—')}</td>
-<td>{html_mod.escape(t.dependencies or '—')}</td>
-<td>{html_mod.escape(t.status or '—')}</td>
-<td>{html_mod.escape(t.related_topic or '—')}</td>
+<td>{html_mod.escape(fill_or(t.task_text, '—'))}</td>
+<td>{html_mod.escape(fill_or(t.expected_result, 'Не указан'))}</td>
+<td>{html_mod.escape(fill_required(t.responsible))}</td>
+<td>{html_mod.escape(fill_or(t.deadline, 'Не определён'))}</td>
+<td>{html_mod.escape(fill_or(t.status, 'Не начато'))}</td>
 </tr>
 """
 
         key_outcomes_html = ""
         if protocol.key_outcomes:
-            outcomes = normalize_text_list(protocol.key_outcomes)
-            key_outcomes_html += "<ul>"
-            for o in outcomes:
-                key_outcomes_html += f"<li>{html_mod.escape(str(o))}</li>"
-            key_outcomes_html += "</ul>"
+            outcomes = split_key_outcomes_semantically(protocol.key_outcomes)
+            if outcomes:
+                key_outcomes_html += "<ol>"
+                for o in outcomes:
+                    key_outcomes_html += f"<li>{html_mod.escape(str(o))}</li>"
+                key_outcomes_html += "</ol>"
 
         current_state_html = ""
         if hasattr(protocol, 'current_state') and protocol.current_state:
             cs = protocol.current_state
             if isinstance(cs, list) and len(cs) > 0 and isinstance(cs[0], dict):
                 current_state_html += "<table>"
-                current_state_html += "<tr><th>Объект / процесс</th><th>Текущее состояние</th></tr>"
-                for item in cs:
-                    current_state_html += f"<tr><td>{html_mod.escape(str(item.get('object','')))}</td><td>{html_mod.escape(str(item.get('state','')))}</td></tr>"
+                current_state_html += "<tr><th>№</th><th>Объект / процесс</th><th>Текущее состояние</th></tr>"
+                for idx, item in enumerate(cs, 1):
+                    obj = item.get('object') or item.get('name') or "—"
+                    state_val = item.get('state_blocks') if isinstance(item.get('state_blocks'), list) else (
+                        item.get('state') or item.get('state_blocks') or "")
+                    state_html = render_rich_text_blocks(
+                        normalize_rich_text_blocks(state_val)
+                    ) or "—"
+                    current_state_html += (f"<tr><td class=\"num\">{idx}</td>"
+                                           f"<td>{html_mod.escape(str(obj))}</td>"
+                                           f"<td>{state_html}</td></tr>")
                 current_state_html += "</table>"
             elif cs:
-                current_state_html += f"<p>{html_mod.escape(str(cs))}</p>"
+                current_state_html = render_rich_text_blocks(
+                    normalize_rich_text_blocks(cs)
+                ) or "<p>—</p>"
 
         decisions_table = ""
         if protocol.decisions:
@@ -1204,13 +1214,7 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 <thead>
 <tr>
     <th>№</th>
-    <th>Решение</th>
-    <th>Контекст и основание</th>
-    <th>Что согласовано</th>
-    <th>Границы решения</th>
-    <th>Ответственные / участники</th>
-    <th>Срок</th>
-    <th>Связанная тема</th>
+    <th>Принятое решение</th>
 </tr>
 </thead>
 <tbody>
@@ -1224,15 +1228,11 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 <thead>
 <tr>
     <th>№</th>
-    <th>Вопрос</th>
-    <th>Контекст</th>
-    <th>Что известно</th>
-    <th>Что определить / получить</th>
+    <th>Открытый вопрос</th>
+    <th>Что требуется определить</th>
     <th>Ответственный</th>
-    <th>Срок</th>
-    <th>Следующее действие</th>
+    <th>Срок / контрольная точка</th>
     <th>Статус</th>
-    <th>Связанная тема</th>
 </tr>
 </thead>
 <tbody>
@@ -1248,14 +1248,8 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
     <th>№</th>
     <th>Тип</th>
     <th>Риск / ограничение</th>
-    <th>Причина</th>
-    <th>Влияние</th>
-    <th>Условие проявления</th>
-    <th>Меры</th>
+    <th>Стратегия реагирования</th>
     <th>Ответственный</th>
-    <th>Срок</th>
-    <th>Статус</th>
-    <th>Связанная тема</th>
 </tr>
 </thead>
 <tbody>
@@ -1270,14 +1264,10 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 <tr>
     <th>№</th>
     <th>Задача</th>
-    <th>Основание</th>
     <th>Ожидаемый результат</th>
     <th>Ответственный</th>
-    <th>Соисполнители</th>
     <th>Срок</th>
-    <th>Зависимости</th>
     <th>Статус</th>
-    <th>Связанная тема</th>
 </tr>
 </thead>
 <tbody>
@@ -1415,7 +1405,7 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 <p class="header-meta"><strong>Дата встречи:</strong> {date_str} | <strong>Время:</strong> {time_str}</p>
 <p><strong>Название протокола:</strong> {title_safe}</p>
 {meeting_context_html or '<p>—</p>'}
-<p><strong>Клиент:</strong> {html_mod.escape(protocol.client_name or '—')} | <strong>Проект:</strong> {html_mod.escape(protocol.project_name or '—')}</p>
+<p><strong>Клиент:</strong> {html_mod.escape(protocol.client_name or 'Не определено')} | <strong>Проект:</strong> {html_mod.escape(protocol.project_name or 'Не определено')}</p>
 
 <h2>{self.SECTION_NAMES['participants']}</h2>
 <table>
@@ -1479,6 +1469,36 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
             report.add_issue("no_html_tag", "Отсутствует тег <html>", ValidationStatus.FAILED)
         if "<body" not in html:
             report.add_issue("no_body_tag", "Отсутствует тег <body>", ValidationStatus.FAILED)
+
+        # ── Readability / UX contract ───────────────────────────────────
+        if not protocol.client_name or protocol.client_name in ("—", "Не определено"):
+            report.add_issue(
+                "empty_client", "Клиент не определён автоматически", ValidationStatus.FAILED, "general_info",
+            )
+        if not protocol.project_name or protocol.project_name in ("—", "Не определено"):
+            report.add_issue(
+                "empty_project", "Проект не определён автоматически", ValidationStatus.FAILED, "general_info",
+            )
+        li_count = html.count("<li>")
+        if li_count < 3:
+            report.add_issue(
+                "few_li", f"В HTML недостаточно элементов списка (<li>): {li_count} (<3)",
+                ValidationStatus.FAILED, "key_outcomes",
+            )
+        if ".." in html:
+            report.add_issue(
+                "double_dots", "В HTML найдены двойные точки '..'", ValidationStatus.FAILED,
+            )
+        # Monolithic cells: any td text longer than 700 chars without inner tags
+        for cell in re.findall(r"<td[^>]*>(.*?)</td>", html, re.DOTALL):
+            inner = re.sub(r"<[^>]+>", "", cell).strip()
+            if len(inner) > 700:
+                report.add_issue(
+                    "monolithic_cell",
+                    f"Монолитная ячейка длиной {len(inner)} символов без структурного разделения.",
+                    ValidationStatus.FAILED,
+                )
+                break
 
         for section_key, section_ru in self.SECTION_NAMES.items():
             if section_ru not in html:

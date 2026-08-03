@@ -115,10 +115,24 @@ class ProcessingService:
             system_prompt = template.get_system_prompt()
             json_schema = template.get_schema()
 
+            # Automatic project context resolution (authoritative, before LLM)
+            from services.project_context_resolver import resolve_project_context
+            resolution = resolve_project_context(
+                transcript_text=transcript_text,
+                source_filename=str(item.source_path) if item.source_path else item.display_name,
+                source_title=item.display_name,
+                source_metadata={"display_name": item.display_name},
+                participants=[],
+            )
+
             user_prompt = (
                 f"Транскрипт встречи:\n\n{transcript_text}\n\n"
                 f"Дата встречи: {meeting_date or 'не определена'}\n"
                 f"Название: {item.display_name}\n"
+                f"Клиент: {resolution.client_name}\n"
+                f"Проект: {resolution.project_name}\n"
+                "Не изменяй клиента и проект, если они определены; "
+                "используй их в общей информации документа.\n"
             )
 
             try:
@@ -193,8 +207,24 @@ class ProcessingService:
                         commitment_confirmed=True,
                     ))
 
-            protocol.client_name = item.client_name
-            protocol.project_name = item.project_name
+            protocol.client_name = resolution.client_name
+            protocol.project_name = resolution.project_name
+
+            if item.debug_directory:
+                try:
+                    item.debug_directory.mkdir(parents=True, exist_ok=True)
+                    with open(item.debug_directory / "project_context_resolution.json", "w", encoding="utf-8") as _f:
+                        json.dump({
+                            "client_name": resolution.client_name,
+                            "project_name": resolution.project_name,
+                            "confidence": resolution.confidence,
+                            "resolution_method": resolution.resolution_method,
+                            "matched_profile_id": resolution.matched_profile_id,
+                            "evidence": resolution.evidence,
+                            "alternatives": resolution.alternatives,
+                        }, _f, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
 
             date_part = ""
             if meeting_date:
@@ -202,10 +232,10 @@ class ProcessingService:
             confluence_title = f"Протокол встречи{date_part}"
             if protocol.protocol_title and "test" not in protocol.protocol_title.lower():
                 confluence_title += f" {protocol.protocol_title}"
-            if item.client_name:
-                confluence_title += f" — {item.client_name}"
-                if item.project_name:
-                    confluence_title += f", {item.project_name}"
+            if protocol.client_name and protocol.client_name != "Не определено":
+                confluence_title += f" — {protocol.client_name}"
+                if protocol.project_name:
+                    confluence_title += f", {protocol.project_name}"
 
             # Stage: rendering (technical)
             self._report_progress("rendering", 85, item)
@@ -281,6 +311,8 @@ class ProcessingService:
                                 "provider": self.config.llm_provider,
                                 "model": self.config.llm_model,
                                 "template": item.protocol_template,
+                                "client_name": protocol.client_name,
+                                "project_name": protocol.project_name,
                                 "confluence_page_id": page.get("id", ""),
                                 "confluence_url": result_url,
                                 "warnings": warnings,
@@ -500,6 +532,8 @@ class ProcessingService:
                 if protocol.meeting_time:
                     date_str += " " + protocol.meeting_time.strftime("%H:%M")
             msg = f"Тема встречи: {title}\n"
+            if protocol.client_name and protocol.project_name and protocol.client_name != "Не определено":
+                msg += f"Клиент: {protocol.client_name}\nПроект: {protocol.project_name}\n"
             if date_str:
                 msg += f"Дата: {date_str}\n\n"
             msg += f"Протокол в Confluence:\n{url}\n\nИсточник записи: локальный файл"
