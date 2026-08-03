@@ -1138,6 +1138,9 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
             decisions_rows += f"""<tr>
 <td class=\"num\">{i}</td>
 <td>{html_mod.escape(fill_or(d.decision_text, '—'))}</td>
+<td>{html_mod.escape(fill_or(d.context_and_basis, '—'))}</td>
+<td>{html_mod.escape(fill_or(d.responsible, '—'))}</td>
+<td>{html_mod.escape(fill_or(d.deadline, '—'))}</td>
 </tr>
 """
 
@@ -1147,21 +1150,22 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 <td class=\"num\">{i}</td>
 <td>{html_mod.escape(fill_or(q.question_text, '—'))}</td>
 <td>{html_mod.escape(fill_or(q.to_determine, '—'))}</td>
-<td>{html_mod.escape(fill_required(q.responsible))}</td>
-<td>{html_mod.escape(fill_or(q.deadline, 'Не определён'))}</td>
+<td>{html_mod.escape(fill_or(q.responsible, '—'))}</td>
+<td>{html_mod.escape(fill_or(q.deadline, '—'))}</td>
 <td>{html_mod.escape(fill_or(q.status, 'Открыт'))}</td>
 </tr>
 """
 
         risks_rows = ""
         for i, r in enumerate(protocol.risks, 1):
-            strategy = r.measures or "Стратегия не определена; требуется отдельная проработка."
             risks_rows += f"""<tr>
 <td class=\"num\">{i}</td>
 <td>{html_mod.escape(fill_or(r.risk_type, 'Риск'))}</td>
 <td>{html_mod.escape(fill_or(r.risk_text, '—'))}</td>
-<td>{html_mod.escape(strategy)}</td>
-<td>{html_mod.escape(fill_required(r.responsible))}</td>
+<td>{html_mod.escape(fill_or(r.reason, '—'))}</td>
+<td>{html_mod.escape(fill_or(r.impact, '—'))}</td>
+<td>{html_mod.escape(fill_or(r.measures, '—'))}</td>
+<td>{html_mod.escape(fill_or(r.responsible, '—'))}</td>
 </tr>
 """
 
@@ -1170,9 +1174,10 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
             tasks_rows += f"""<tr>
 <td class=\"num\">{i}</td>
 <td>{html_mod.escape(fill_or(t.task_text, '—'))}</td>
-<td>{html_mod.escape(fill_or(t.expected_result, 'Не указан'))}</td>
-<td>{html_mod.escape(fill_required(t.responsible))}</td>
-<td>{html_mod.escape(fill_or(t.deadline, 'Не определён'))}</td>
+<td>{html_mod.escape(fill_or(t.basis, '—'))}</td>
+<td>{html_mod.escape(fill_or(t.expected_result, '—'))}</td>
+<td>{html_mod.escape(fill_or(t.responsible, '—'))}</td>
+<td>{html_mod.escape(fill_or(t.deadline, '—'))}</td>
 <td>{html_mod.escape(fill_or(t.status, 'Не начато'))}</td>
 </tr>
 """
@@ -1215,6 +1220,9 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 <tr>
     <th>№</th>
     <th>Принятое решение</th>
+    <th>Контекст и основание</th>
+    <th>Ответственные</th>
+    <th>Срок</th>
 </tr>
 </thead>
 <tbody>
@@ -1248,6 +1256,8 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
     <th>№</th>
     <th>Тип</th>
     <th>Риск / ограничение</th>
+    <th>Причина</th>
+    <th>Влияние</th>
     <th>Стратегия реагирования</th>
     <th>Ответственный</th>
 </tr>
@@ -1264,6 +1274,7 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 <tr>
     <th>№</th>
     <th>Задача</th>
+    <th>Основание</th>
     <th>Ожидаемый результат</th>
     <th>Ответственный</th>
     <th>Срок</th>
@@ -1452,6 +1463,7 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 {questions_table or '<p>Вопросы отсутствуют</p>'}
 
 <h2>{self.SECTION_NAMES['risks']}</h2>
+<p class="section-content"><em>Стратегии реагирования, не согласованные на встрече, сформированы как рекомендации и требуют подтверждения ответственными сторонами.</em></p>
 {risks_table or '<p>Риски отсутствуют</p>'}
 
 <h2>{self.SECTION_NAMES['tasks']}</h2>

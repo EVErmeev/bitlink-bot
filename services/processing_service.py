@@ -161,51 +161,104 @@ class ProcessingService:
             protocol = template.assemble_from_llm_json(protocol, atomic_items, llm_data,
                 {"date": meeting_date, "time": meeting_time, "item": item})
 
-            # Register extraction pass — extract decisions/questions/risks/tasks
-            from services.protocol_register_extractor import extract_protocol_registers
-            registers = extract_protocol_registers(transcript_text, protocol.topic_blocks, protocol.participants, self.llm)
+            # Register pipeline: full transcript, chunked, linked, enriched, merged
+            from services.protocol_register_pipeline import run_register_pipeline
+            from services.protocol_register_validation import (
+                build_register_quality_report,
+                register_quality_blocks,
+            )
+            registers, reg_artifacts = run_register_pipeline(
+                transcript_text, protocol.topic_blocks, protocol.participants,
+                self.llm, main_llm_data=llm_data,
+            )
 
-            # Merge registers into protocol (priority: extractor > LLM > atomic)
+            # Merge registers into protocol, carrying ALL fields (no loss)
+            protocol.decisions = []
+            protocol.questions = []
+            protocol.risks = []
+            protocol.tasks = []
             for d in registers.get("decisions", []):
-                if isinstance(d, dict) and d.get("decision_text"):
-                    protocol.decisions.append(DecisionItem(
-                        decision_id=str(uuid.uuid4())[:8], source_context_id=source_ctx_id,
-                        decision_text=d.get("decision_text", ""),
-                        context_and_basis=d.get("context_and_basis", ""),
-                        responsible=d.get("responsible", ""), deadline=d.get("deadline", ""),
-                        related_topic=d.get("related_topic", ""),
-                        explicit_agreement=True, confidence=0.7,
-                        evidence=d.get("evidence", ""),
-                    ))
-
+                if not isinstance(d, dict) or not d.get("decision_text"):
+                    continue
+                protocol.decisions.append(DecisionItem(
+                    decision_id=d.get("decision_id") or str(uuid.uuid4())[:8],
+                    source_context_id=source_ctx_id,
+                    decision_text=d.get("decision_text", ""),
+                    context_and_basis=d.get("context_and_basis", ""),
+                    agreed_scope=d.get("agreed_scope", ""),
+                    boundaries=d.get("boundaries", ""),
+                    responsible=d.get("responsible", ""),
+                    deadline=d.get("deadline", ""),
+                    related_topic=d.get("related_topic", "") or d.get("topic_id", ""),
+                    explicit_agreement=d.get("explicit_agreement", True),
+                    confidence=d.get("confidence", 0.7),
+                    evidence=d.get("evidence", ""),
+                ))
             for q in registers.get("questions", []):
-                if isinstance(q, dict) and q.get("question_text"):
-                    protocol.questions.append(QuestionItem(
-                        question_id=str(uuid.uuid4())[:8], source_context_id=source_ctx_id,
-                        question_text=q.get("question_text", ""),
-                        context=q.get("context", ""), to_determine=q.get("to_determine", ""),
-                        status=q.get("status", "Открыт"), related_topic=q.get("related_topic", ""),
-                    ))
-
+                if not isinstance(q, dict) or not q.get("question_text"):
+                    continue
+                protocol.questions.append(QuestionItem(
+                    question_id=q.get("question_id") or str(uuid.uuid4())[:8],
+                    source_context_id=source_ctx_id,
+                    question_text=q.get("question_text", ""),
+                    context=q.get("context", ""),
+                    known_info=q.get("known_info", ""),
+                    to_determine=q.get("to_determine", ""),
+                    responsible=q.get("responsible", ""),
+                    deadline=q.get("deadline", ""),
+                    next_action=q.get("next_action", ""),
+                    status=q.get("status", "Открыт"),
+                    related_topic=q.get("related_topic", "") or q.get("topic_id", ""),
+                ))
             for r in registers.get("risks", []):
-                if isinstance(r, dict) and r.get("risk_text"):
-                    protocol.risks.append(RiskItem(
-                        risk_id=str(uuid.uuid4())[:8], source_context_id=source_ctx_id,
-                        risk_text=r.get("risk_text", ""),
-                        risk_type=r.get("risk_type", "Риск"),
-                        reason=r.get("reason", ""), impact=r.get("impact", ""),
-                        status="Активен", related_topic=r.get("related_topic", ""),
-                    ))
-
+                if not isinstance(r, dict) or not r.get("risk_text"):
+                    continue
+                protocol.risks.append(RiskItem(
+                    risk_id=r.get("risk_id") or str(uuid.uuid4())[:8],
+                    source_context_id=source_ctx_id,
+                    risk_text=r.get("risk_text", ""),
+                    risk_type=r.get("risk_type", "Риск"),
+                    reason=r.get("reason", ""),
+                    impact=r.get("impact", ""),
+                    trigger_condition=r.get("trigger_condition", ""),
+                    measures=r.get("measures", ""),
+                    responsible=r.get("responsible", ""),
+                    deadline=r.get("deadline", ""),
+                    status=r.get("status", "Активен"),
+                    related_topic=r.get("related_topic", "") or r.get("topic_id", ""),
+                ))
             for t in registers.get("tasks", []):
-                if isinstance(t, dict) and t.get("task_text"):
-                    protocol.tasks.append(TaskItem(
-                        task_id=str(uuid.uuid4())[:8], source_context_id=source_ctx_id,
-                        task_text=t.get("task_text", ""),
-                        basis=t.get("basis", ""), responsible=t.get("responsible", ""),
-                        deadline=t.get("deadline", ""), related_topic=t.get("related_topic", ""),
-                        commitment_confirmed=True,
-                    ))
+                if not isinstance(t, dict) or not t.get("task_text"):
+                    continue
+                protocol.tasks.append(TaskItem(
+                    task_id=t.get("task_id") or str(uuid.uuid4())[:8],
+                    source_context_id=source_ctx_id,
+                    task_text=t.get("task_text", ""),
+                    basis=t.get("basis", ""),
+                    expected_result=t.get("expected_result", ""),
+                    responsible=t.get("responsible", ""),
+                    co_executors=t.get("co_executors", ""),
+                    deadline=t.get("deadline", ""),
+                    dependencies=t.get("dependencies", ""),
+                    status=t.get("status", "Не начато"),
+                    related_topic=t.get("related_topic", "") or t.get("topic_id", ""),
+                    commitment_confirmed=t.get("commitment_confirmed", True),
+                ))
+
+            # register debug artifacts
+            if item.debug_directory:
+                item.debug_directory.mkdir(parents=True, exist_ok=True)
+                for _name, _payload in reg_artifacts.items():
+                    try:
+                        (item.debug_directory / f"{_name}.json").write_text(
+                            json.dumps(_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+                    except Exception:
+                        pass
+                quality_report = build_register_quality_report(
+                    registers, reg_artifacts["register_diff"])
+                (item.debug_directory / "register_quality_report.json").write_text(
+                    json.dumps(quality_report, indent=2, ensure_ascii=False), encoding="utf-8")
+                reg_artifacts["register_quality_blocks"] = register_quality_blocks(registers)
 
             protocol.client_name = resolution.client_name
             protocol.project_name = resolution.project_name
@@ -256,6 +309,7 @@ class ProcessingService:
             # Quality checks (based on mode)
             quality_mode = settings.PROTOCOL_QUALITY_MODE
             warnings = []
+            register_blocks: list[str] = []
             if quality_mode != "off":
                 struct_report = template.validate(protocol)
                 render_report = template.validate_render(html, protocol)
@@ -265,14 +319,24 @@ class ProcessingService:
                 for issue in getattr(render_report, 'issues', []):
                     warnings.append(f"[render] {issue.message}")
 
+                from services.protocol_register_validation import register_quality_blocks
+                register_blocks = register_quality_blocks(registers)
+                for block in register_blocks:
+                    warnings.append(f"[register] {block}")
+
                 if item.debug_directory:
                     import json as _json
-                    qr = {"mode": quality_mode, "warnings": warnings, "struct_passed": struct_report.passed if hasattr(struct_report, 'passed') else None}
+                    qr = {"mode": quality_mode, "warnings": warnings,
+                          "register_blocks": register_blocks,
+                          "struct_passed": struct_report.passed if hasattr(struct_report, 'passed') else None}
                     with open(item.debug_directory / "quality_report.json", "w", encoding="utf-8") as f:
                         _json.dump(qr, f, indent=2, ensure_ascii=False)
 
-            if quality_mode == "strict" and warnings:
+            if (quality_mode == "strict" and warnings) or (register_blocks and quality_mode != "off"):
                 item.status = "validation_failed"
+                item.error_details = "Quality gate failed:\n" + "\n".join(warnings[:8])
+                result["success"] = False
+                result["error"] = "Quality gate failed"
                 item.error_details = "Quality gate failed:\n" + "\n".join(warnings[:5])
                 result["success"] = False
                 result["error"] = "Quality gate failed"

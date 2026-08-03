@@ -46,11 +46,13 @@ def _headers(html):
 
 
 class TestVisibleColumns:
-    def test_decisions_table_has_only_expected_columns(self):
+    def test_decisions_table_has_expected_columns(self):
         html = ProjectDetailedTemplate().render_html(_build_protocol())
         sec = re.search(r"Принятые решения</h2>(.*?)</table>", html, re.DOTALL)
         assert sec, "секция решений не найдена"
-        assert _headers(sec.group(1)) == ["№", "Принятое решение"]
+        assert _headers(sec.group(1)) == [
+            "№", "Принятое решение", "Контекст и основание", "Ответственные", "Срок",
+        ]
 
     def test_questions_table_has_only_expected_columns(self):
         html = ProjectDetailedTemplate().render_html(_build_protocol())
@@ -60,25 +62,32 @@ class TestVisibleColumns:
             "Ответственный", "Срок / контрольная точка", "Статус",
         ]
 
-    def test_risks_table_has_response_strategy(self):
+    def test_risks_table_has_reason_impact_and_strategy(self):
         html = ProjectDetailedTemplate().render_html(_build_protocol())
         sec = re.search(r"Риски и ограничения</h2>(.*?)</table>", html, re.DOTALL)
         headers = _headers(sec.group(1))
+        assert "Причина" in headers
+        assert "Влияние" in headers
         assert "Стратегия реагирования" in headers
-        assert headers == ["№", "Тип", "Риск / ограничение", "Стратегия реагирования", "Ответственный"]
+        assert headers == [
+            "№", "Тип", "Риск / ограничение", "Причина", "Влияние",
+            "Стратегия реагирования", "Ответственный",
+        ]
 
-    def test_tasks_table_has_expected_result_and_status(self):
+    def test_tasks_table_restores_basis_and_expected_result(self):
         html = ProjectDetailedTemplate().render_html(_build_protocol())
         sec = re.search(r"Задачи и следующие шаги</h2>(.*?)</table>", html, re.DOTALL)
         assert _headers(sec.group(1)) == [
-            "№", "Задача", "Ожидаемый результат", "Ответственный", "Срок", "Статус",
+            "№", "Задача", "Основание", "Ожидаемый результат",
+            "Ответственный", "Срок", "Статус",
         ]
 
-    def test_removed_columns_are_absent_from_html(self):
+    def test_removed_technical_columns_are_absent_from_html(self):
         html = ProjectDetailedTemplate().render_html(_build_protocol())
         for col in ("Соисполнители", "Зависимости", "Связанная тема",
-                    "Контекст и основание", "Границы решения", "Что известно",
-                    "Следующее действие", "Условие проявления", "Меры"):
+                    "Что согласовано", "Границы решения", "Что известно",
+                    "Следующее действие", "Условие проявления", "Меры",
+                    "Связанный тематический блок"):
             assert col not in html, f"лишняя колонка осталась: {col}"
 
     def test_visible_tables_have_no_empty_cells(self):
