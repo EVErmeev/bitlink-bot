@@ -1,4 +1,5 @@
 import uuid
+from urllib.parse import urlparse
 
 import requests
 
@@ -23,6 +24,30 @@ class ConfluenceConfigurationError(Exception):
     pass
 
 
+def normalize_confluence_base_url(raw: str | None) -> str:
+    """Return the root URL (scheme://host, no path, no trailing slash).
+
+    Rejects any path so that a misconfigured Base URL (with /rest/api,
+    /wiki, /spaces, /display or a concrete page URL) fails fast instead of
+    producing a double-path 404.
+    """
+    value = (raw or "").strip()
+    if not value:
+        return ""
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ConfluenceConfigurationError(
+            f"Invalid CONFLUENCE_BASE_URL: {value!r} (expected http(s)://host)"
+        )
+    path = (parsed.path or "").rstrip("/")
+    if path:
+        raise ConfluenceConfigurationError(
+            f"CONFLUENCE_BASE_URL must be the root URL (http(s)://host) without a path, "
+            f"got {path!r}. Remove /rest/api, /wiki, /spaces, /display or any page URL."
+        )
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 class ConfluenceClient:
     def __init__(self, base_url=None, token=None, space_key=None):
         self.provider = settings.CONFLUENCE_PROVIDER
@@ -32,7 +57,9 @@ class ConfluenceClient:
             )
 
         self.mock_mode = (self.provider == "mock")
-        self.base_url = base_url or settings.CONFLUENCE_BASE_URL
+        self.base_url = normalize_confluence_base_url(
+            base_url or settings.CONFLUENCE_BASE_URL
+        )
         self.token = token or settings.CONFLUENCE_TOKEN
         self.space_key = space_key or settings.CONFLUENCE_SPACE_KEY
 
@@ -68,6 +95,20 @@ class ConfluenceClient:
             except Exception:
                 return False
         return False
+
+    def parent_page_exists(self, parent_page_id: str) -> bool:
+        """Verify a parent page is reachable via the REST API (before generation)."""
+        if self.provider != "rest" or not parent_page_id:
+            return False
+        try:
+            resp = requests.get(
+                f"{self.base_url}/rest/api/content/{parent_page_id}",
+                headers={"Authorization": f"Bearer {self.token}"},
+                timeout=15,
+            )
+            return resp.status_code == 200
+        except Exception:
+            return False
 
     def create_page(self, title: str, storage_html: str,
                     parent_page_id: str | None = None,

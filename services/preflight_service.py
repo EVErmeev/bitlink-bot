@@ -37,6 +37,39 @@ def run_preflight(items: list[BatchItem], config: RuntimeConfig) -> dict:
     }
 
 
+def _check_confluence_publish(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list[str], bool]:
+    """Confluence publish prerequisites, including a live parent-page check."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    blocking = False
+    if item.dry_run or config.confluence_provider == "mock":
+        return errors, warnings, blocking
+    if not config.confluence_base_url or not config.confluence_token:
+        errors.append(f"{item.display_name}: Confluence REST требует BASE_URL и TOKEN")
+        blocking = True
+        return errors, warnings, blocking
+    if not config.confluence_parent_page_id:
+        warnings.append(f"{item.display_name}: parent_page_id не указан")
+        return errors, warnings, blocking
+    try:
+        import requests
+        from services.confluence_service import normalize_confluence_base_url
+        base = normalize_confluence_base_url(config.confluence_base_url)
+        resp = requests.get(
+            f"{base}/rest/api/content/{config.confluence_parent_page_id}",
+            headers={"Authorization": f"Bearer {config.confluence_token}"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            warnings.append(
+                f"{item.display_name}: родительская страница {config.confluence_parent_page_id} "
+                f"недоступна (HTTP {resp.status_code}) — публикация под неё может не пройти"
+            )
+    except Exception:
+        warnings.append(f"{item.display_name}: не удалось проверить родительскую страницу Confluence")
+    return errors, warnings, blocking
+
+
 def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list[str], bool]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -95,11 +128,11 @@ def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list
 
         # Confluence only if not dry-run
         if not item.dry_run and config.confluence_provider != "mock":
-            if not config.confluence_base_url or not config.confluence_token:
-                errors.append(f"{item.display_name}: Confluence REST требует BASE_URL и TOKEN")
+            c_err, c_warn, c_block = _check_confluence_publish(item, config)
+            errors.extend(c_err)
+            warnings.extend(c_warn)
+            if c_block:
                 blocking = True
-            elif not config.confluence_parent_page_id:
-                warnings.append(f"{item.display_name}: parent_page_id не указан")
         # Telegram only if send_telegram
         if item.send_telegram and config.telegram_provider == "real":
             if not config.telegram_bot_token or not config.telegram_chat_id:
@@ -132,11 +165,11 @@ def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list
 
         # Confluence same as transcript
         if not item.dry_run and config.confluence_provider != "mock":
-            if not config.confluence_base_url or not config.confluence_token:
-                errors.append(f"{item.display_name}: Confluence REST требует BASE_URL и TOKEN")
+            c_err, c_warn, c_block = _check_confluence_publish(item, config)
+            errors.extend(c_err)
+            warnings.extend(c_warn)
+            if c_block:
                 blocking = True
-            elif not config.confluence_parent_page_id:
-                warnings.append(f"{item.display_name}: parent_page_id не указан")
         # Telegram same as transcript
         if item.send_telegram and config.telegram_provider == "real":
             if not config.telegram_bot_token or not config.telegram_chat_id:

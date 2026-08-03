@@ -949,6 +949,8 @@ class SettingsFrame(ttk.Frame):
 
         # Worker uses snapshot only, no Tkinter reads
         def check_confluence(base_url, token, space_key, parent_id, parent_title):
+            from services.confluence_service import normalize_confluence_base_url
+            base_url = normalize_confluence_base_url(base_url or "")
             headers = {"Authorization": f"Bearer {token}"}
             start = datetime.now(UTC)
 
@@ -1529,6 +1531,13 @@ class SettingsFrame(ttk.Frame):
             env_map["LLM_MODEL"] = self._llm_openai_model_entry.get().strip()
 
         for key, value in env_map.items():
+            if key == "CONFLUENCE_BASE_URL":
+                from services.confluence_service import normalize_confluence_base_url
+                try:
+                    value = normalize_confluence_base_url(value or "")
+                except Exception as exc:
+                    messagebox.showerror("Ошибка настроек Confluence", str(exc))
+                    return
             set_key(str(self.env_path), key, value)
 
         importlib.reload(settings)
