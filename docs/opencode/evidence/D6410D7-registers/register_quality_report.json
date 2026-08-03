@@ -1,0 +1,19 @@
+{
+  "decisions_count": 15,
+  "questions_count": 11,
+  "risks_count": 16,
+  "tasks_count": 20,
+  "decision_context_coverage": 1.0,
+  "question_responsible_coverage": 1.0,
+  "question_deadline_coverage": 1.0,
+  "risk_reason_coverage": 1.0,
+  "risk_impact_coverage": 1.0,
+  "risk_strategy_coverage": 1.0,
+  "risk_responsible_coverage": 1.0,
+  "task_basis_coverage": 1.0,
+  "task_expected_result_coverage": 1.0,
+  "task_responsible_coverage": 1.0,
+  "task_deadline_coverage": 1.0,
+  "generic_placeholder_count": 177,
+  "silent_drop_count": 0
+}
