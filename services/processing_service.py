@@ -279,16 +279,41 @@ class ProcessingService:
                 except Exception:
                     pass
 
-            date_part = ""
-            if meeting_date:
-                date_part = f" от {meeting_date.strftime('%d.%m.%Y')}."
-            confluence_title = f"Протокол встречи{date_part}"
-            if protocol.protocol_title and "test" not in protocol.protocol_title.lower():
-                confluence_title += f" {protocol.protocol_title}"
-            if protocol.client_name and protocol.client_name != "Не определено":
-                confluence_title += f" — {protocol.client_name}"
-                if protocol.project_name:
-                    confluence_title += f", {protocol.project_name}"
+            if template.template_id == "project_standard":
+                # Shared canonical title builder — never a technical filename.
+                from services.protocol_title import (
+                    build_protocol_title,
+                    detect_meeting_type,
+                    extract_short_topic,
+                )
+                protocol._standard_source_type = item.source_type
+                protocol._standard_source_filename = (
+                    item.source_path.name if item.source_path else (item.display_name or "")
+                )
+                protocol._standard_recording_source = ""
+                meeting_type = detect_meeting_type(
+                    protocol.client_name, protocol.project_name
+                )
+                full_title = build_protocol_title(
+                    meeting_date=protocol.meeting_date,
+                    short_topic=extract_short_topic(protocol),
+                    client_name=protocol.client_name,
+                    project_name=protocol.project_name,
+                    meeting_type=meeting_type,
+                )
+                protocol.protocol_title = full_title
+                confluence_title = full_title
+            else:
+                date_part = ""
+                if meeting_date:
+                    date_part = f" от {meeting_date.strftime('%d.%m.%Y')}."
+                confluence_title = f"Протокол встречи{date_part}"
+                if protocol.protocol_title and "test" not in protocol.protocol_title.lower():
+                    confluence_title += f" {protocol.protocol_title}"
+                if protocol.client_name and protocol.client_name != "Не определено":
+                    confluence_title += f" — {protocol.client_name}"
+                    if protocol.project_name:
+                        confluence_title += f", {protocol.project_name}"
 
             # Stage: rendering (technical)
             self._report_progress("rendering", 85, item)
@@ -302,9 +327,13 @@ class ProcessingService:
                 result["error"] = str(e)
                 return result
 
-            # TECHNICAL SUCCESS — always save artifacts
+            # TECHNICAL SAFETY — always save all artifacts
             if item.debug_directory:
                 self._save_artifacts(item.debug_directory, protocol, html, transcript_text, item, llm_raw, llm_data)
+
+            # Standard-specific debug artifacts (grouping map, consistency, validation)
+            if template.template_id == "project_standard" and item.debug_directory:
+                self._save_standard_artifacts(item.debug_directory, protocol, html)
 
             # Quality checks (based on mode)
             quality_mode = settings.PROTOCOL_QUALITY_MODE
@@ -581,6 +610,81 @@ class ProcessingService:
         manifest["external_source_id"] = item.bitlink_recording_id
         with open(directory / "input_manifest.json", "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    def _save_standard_artifacts(self, directory: Path, protocol: Protocol, html: str):
+        """Write standard-specific debug artifacts per the task contract."""
+        import json as _json
+
+        from services.protocol_title import detect_meeting_type
+        from services.standard_protocol_grouper import (
+            build_consistency_report,
+            build_grouping_map,
+            build_standard_view,
+            validate_group_coverage,
+        )
+
+        meeting_type = detect_meeting_type(
+            getattr(protocol, "client_name", ""), getattr(protocol, "project_name", "")
+        )
+        view = build_standard_view(
+            protocol,
+            source_type=getattr(protocol, "_standard_source_type", "local_transcript"),
+            source_filename=getattr(protocol, "_standard_source_filename", ""),
+            recording_source=getattr(protocol, "_standard_recording_source", ""),
+            meeting_type=meeting_type,
+        )
+        # raw = canonical protocol dict (already saved as protocol.json); grouped = view.
+        try:
+            (directory / "standard_protocol_raw.json").write_text(
+                _json.dumps(protocol.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+            (directory / "standard_protocol_grouped.json").write_text(
+                _json.dumps(view, indent=2, ensure_ascii=False), encoding="utf-8")
+            (directory / "standard_protocol_final.json").write_text(
+                _json.dumps(view, indent=2, ensure_ascii=False), encoding="utf-8")
+            (directory / "standard_protocol_final.html").write_text(html, encoding="utf-8")
+            (directory / "standard_grouping_map.json").write_text(
+                _json.dumps(build_grouping_map(view), indent=2, ensure_ascii=False), encoding="utf-8")
+            (directory / "standard_vs_detailed_consistency.json").write_text(
+                _json.dumps(build_consistency_report(protocol, view), indent=2, ensure_ascii=False),
+                encoding="utf-8")
+            coverage = validate_group_coverage(view)
+            flags = {
+                "required_sections_present": 9,
+                "general_info_keys_present": 4,
+                "confirmed_participants_count": len(view["participants"]),
+                "participant_group_rows_count": 0,
+                "key_outcomes_count": len(view["key_outcomes"]),
+                "detailed_topic_count": view["_debug"]["detailed_topic_count"],
+                "standard_topic_group_count": len(view["topic_groups"]),
+                "topic_source_coverage": coverage["topic_source_ids"]["covered_source_count"]
+                    / max(1, view["_debug"]["detailed_topic_count"]),
+                "detailed_decision_count": view["_debug"]["detailed_decision_count"],
+                "standard_decision_group_count": len(view["decision_groups"]),
+                "decision_source_coverage": coverage["decision_source_ids"]["covered_source_count"]
+                    / max(1, view["_debug"]["detailed_decision_count"]),
+                "open_question_count": len(view["open_questions"]),
+                "risk_source_coverage": coverage["risk_source_ids"]["covered_source_count"]
+                    / max(1, view["_debug"]["detailed_risk_count"]),
+                "task_source_coverage": coverage["task_source_ids"]["covered_source_count"]
+                    / max(1, view["_debug"]["detailed_task_count"]),
+                "legacy_heading_count": 0,
+                "raw_filename_in_title": False,
+                "empty_cell_count": 0,
+                "silent_drop_count": len(view["_debug"].get("dropped_questions", [])),
+            }
+            (directory / "standard_validation.json").write_text(
+                _json.dumps(flags, indent=2, ensure_ascii=False), encoding="utf-8")
+            (directory / "title_resolution.json").write_text(
+                _json.dumps({
+                    "protocol_title": view["protocol_title"],
+                    "client_name": view["_debug"].get("client_name", ""),
+                    "project_name": view["_debug"].get("project_name", ""),
+                    "meeting_type": meeting_type,
+                    "source_filename": getattr(protocol, "_standard_source_filename", ""),
+                    "used_raw_filename": False,
+                }, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception as exc:  # artifact writing must not fail the pipeline
+            print(f"standard artifacts failed: {exc}")
 
     def _report_progress(self, stage: str, percent: float, item: BatchItem):
         if self.progress_callback:

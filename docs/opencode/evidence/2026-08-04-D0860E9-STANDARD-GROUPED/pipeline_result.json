@@ -1,0 +1,12 @@
+{
+  "source_type": "local_transcript",
+  "provider": "onebit_newton_cli",
+  "model": "gpt4",
+  "template": "project_standard",
+  "client_name": "Не определено",
+  "project_name": "Не определено",
+  "confluence_page_id": "213877138",
+  "confluence_url": "https://art-conf.spbco.1cbit.ru/spaces/TXT/pages/213877138",
+  "warnings": [],
+  "telegram_message_id": 102
+}

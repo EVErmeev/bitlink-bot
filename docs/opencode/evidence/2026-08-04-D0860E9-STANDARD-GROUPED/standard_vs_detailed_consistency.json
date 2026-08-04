@@ -1,0 +1,11 @@
+{
+  "metadata_match": true,
+  "participants_match": true,
+  "decision_source_coverage": 1.0,
+  "question_source_coverage": 1.0,
+  "risk_source_coverage": 1.0,
+  "task_source_coverage": 1.0,
+  "topic_source_coverage": 1.0,
+  "unsupported_standard_items": 0,
+  "lost_critical_items": []
+}
