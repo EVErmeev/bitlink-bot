@@ -811,7 +811,7 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
 </div>
 
 <h2>{self.SECTION_NAMES['management_summary']}</h2>
-<div>{protocol.management_summary.replace(chr(10), '<br>') if protocol.management_summary else '<p>—</p>'}</div>
+<div>{protocol.management_summary.replace(chr(10), '<br/>') if protocol.management_summary else '<p>—</p>'}</div>
 
 <h2>{self.SECTION_NAMES['decisions_and_approaches']}</h2>
 <table>

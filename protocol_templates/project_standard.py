@@ -812,9 +812,9 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
             thematic_html += f"""<div class="topic-block">
 <h3>Тема {i}: {tb.title or '—'}</h3>
 <h4>Обсуждение</h4>
-<p>{tb.discussion_content.replace(chr(10), '<br>') if tb.discussion_content else '—'}</p>
+<p>{tb.discussion_content.replace(chr(10), '<br/>') if tb.discussion_content else '—'}</p>
 <h4>Итог / вывод</h4>
-<p>{tb.conclusion.replace(chr(10), '<br>') if tb.conclusion else '—'}</p>
+<p>{tb.conclusion.replace(chr(10), '<br/>') if tb.conclusion else '—'}</p>
 <h4>Статус</h4>
 <p>{tb.status_text or '—'}</p>
 </div>
@@ -946,19 +946,19 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
 <p>{protocol.meeting_context or '—'}</p>
 
 <h2>{self.SECTION_NAMES['key_outcomes']}</h2>
-<div>{protocol.key_outcomes.replace(chr(10), '<br>') if protocol.key_outcomes else '<p>—</p>'}</div>
+<div>{protocol.key_outcomes.replace(chr(10), '<br/>') if protocol.key_outcomes else '<p>—</p>'}</div>
 
 <h2>{self.SECTION_NAMES['process_scheme']}</h2>
-<div>{protocol.process_scheme.replace(chr(10), '<br>') if protocol.process_scheme else '<p>—</p>'}</div>
+<div>{protocol.process_scheme.replace(chr(10), '<br/>') if protocol.process_scheme else '<p>—</p>'}</div>
 
 <h2>{self.SECTION_NAMES['thematic_sections']}</h2>
 {thematic_html or '<p>Тематические разделы отсутствуют</p>'}
 
 <h2>{self.SECTION_NAMES['agreed_approaches']}</h2>
-<div>{protocol.agreed_approaches.replace(chr(10), '<br>') if protocol.agreed_approaches else '<p>—</p>'}</div>
+<div>{protocol.agreed_approaches.replace(chr(10), '<br/>') if protocol.agreed_approaches else '<p>—</p>'}</div>
 
 <h2>{self.SECTION_NAMES['functional_gaps']}</h2>
-<div>{protocol.functional_gaps.replace(chr(10), '<br>') if protocol.functional_gaps else '<p>—</p>'}</div>
+<div>{protocol.functional_gaps.replace(chr(10), '<br/>') if protocol.functional_gaps else '<p>—</p>'}</div>
 
 <h2>{self.SECTION_NAMES['decisions']}</h2>
 <table>
@@ -1010,7 +1010,7 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
 </table>
 
 <h2>{self.SECTION_NAMES['control_points']}</h2>
-<div>{protocol.control_points.replace(chr(10), '<br>') if protocol.control_points else '<p>—</p>'}</div>
+<div>{protocol.control_points.replace(chr(10), '<br/>') if protocol.control_points else '<p>—</p>'}</div>
 
 <div class="footer">Протокол сгенерирован автоматически. Версия шаблона: {self.template_id} v{self.version}</div>
 </body>
