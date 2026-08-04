@@ -54,14 +54,26 @@ class LLMClient:
     def generate_json(self, system_prompt, user_prompt, json_schema, *,
                       temperature=0.1, max_retries=3):
         from services.json_response_parser import parse_and_validate_json
+        from services.llm_providers import OneBitProviderError
+        import time
 
+        last_cli_error = None
         for attempt in range(max_retries):
-            raw_response = self.generate(
-                system_prompt,
-                user_prompt + "\n\nReturn valid JSON conforming to this schema:\n"
-                + json.dumps(json_schema),
-                temperature=temperature,
-            )
+            try:
+                raw_response = self.generate(
+                    system_prompt,
+                    user_prompt + "\n\nReturn valid JSON conforming to this schema:\n"
+                    + json.dumps(json_schema),
+                    temperature=temperature,
+                )
+            except OneBitProviderError as e:
+                # Transient Newton CLI failures (e.g. "Ошибка: unknown", exit 1)
+                # should be retried, not surfaced immediately.
+                last_cli_error = e
+                if attempt < max_retries - 1:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise
             try:
                 parsed, errors = parse_and_validate_json(
                     raw_response, json_schema, max_repair_attempts=0, generate_fn=None
