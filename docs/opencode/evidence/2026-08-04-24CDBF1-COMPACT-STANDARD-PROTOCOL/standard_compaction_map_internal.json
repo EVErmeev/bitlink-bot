@@ -1,0 +1,54 @@
+{
+  "topic_0": {
+    "title": "Неидентифицированные работы: Pix Operator и «чародейство/волшебство»",
+    "source_ids": [
+      "TB-01",
+      "TB-07"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_1": {
+    "title": "Group Trading, Искра, MasterFarm и Абразивы: подготовка закрывающих документов",
+    "source_ids": [
+      "TB-02",
+      "TB-05",
+      "TB-10"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_2": {
+    "title": "Пулково: актирование августа и дополнительное соглашение",
+    "source_ids": [
+      "TB-03"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_3": {
+    "title": "Retail Group и Иркутск: зависимость от актов и отпусков заказчика",
+    "source_ids": [
+      "TB-04"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_4": {
+    "title": "Липецк: охрана труда и компенсация демо-работ",
+    "source_ids": [
+      "TB-06"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_5": {
+    "title": "Руни и Клеверин: восстановление доработок и клиентский негатив",
+    "source_ids": [
+      "TB-08"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_6": {
+    "title": "Итог июля: недостижение плана закрытия",
+    "source_ids": [
+      "TB-09"
+    ],
+    "compression_reason": "semantic_compression"
+  }
+}

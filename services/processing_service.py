@@ -318,7 +318,11 @@ class ProcessingService:
             # Stage: rendering (technical)
             self._report_progress("rendering", 85, item)
             try:
-                html = template.render_html(protocol)
+                render_llm = None
+                if (template.template_id == "project_standard"
+                        and getattr(settings, "STANDARD_LLM_COMPRESSION", False)):
+                    render_llm = self.llm
+                html = template.render_html(protocol, llm=render_llm)
                 if not html or "<html" not in html.lower() and "<body" not in html.lower():
                     raise Exception("HTML render produced invalid output")
             except Exception as e:
@@ -626,13 +630,15 @@ class ProcessingService:
         meeting_type = detect_meeting_type(
             getattr(protocol, "client_name", ""), getattr(protocol, "project_name", "")
         )
-        view = build_standard_view(
-            protocol,
-            source_type=getattr(protocol, "_standard_source_type", "local_transcript"),
-            source_filename=getattr(protocol, "_standard_source_filename", ""),
-            recording_source=getattr(protocol, "_standard_recording_source", ""),
-            meeting_type=meeting_type,
-        )
+        view = getattr(protocol, "_standard_compressed_view", None)
+        if view is None:
+            view = build_standard_view(
+                protocol,
+                source_type=getattr(protocol, "_standard_source_type", "local_transcript"),
+                source_filename=getattr(protocol, "_standard_source_filename", ""),
+                recording_source=getattr(protocol, "_standard_recording_source", ""),
+                meeting_type=meeting_type,
+            )
         # raw = canonical protocol dict (already saved as protocol.json); grouped = view.
         try:
             (directory / "standard_protocol_raw.json").write_text(
@@ -710,6 +716,7 @@ class ProcessingService:
                 f"https://api.telegram.org/bot{self.config.telegram_bot_token}/sendMessage",
                 json={"chat_id": self.config.telegram_chat_id, "text": msg},
                 timeout=15,
+                verify=getattr(settings, "REQUESTS_VERIFY_SSL", True),
             )
             if resp.status_code == 200 and resp.json().get("ok"):
                 return True, resp.json()["result"]["message_id"]

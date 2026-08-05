@@ -1,0 +1,59 @@
+{
+  "topic_0": {
+    "title": "Диспетчирование производственных заказов и этапов",
+    "source_ids": [
+      "TB-01",
+      "TB-07"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_1": {
+    "title": "Обеспечение этапов производства материалами и связь со сменными заданиями",
+    "source_ids": [
+      "TB-02"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_2": {
+    "title": "Схема передачи материалов на цеховую кладовую",
+    "source_ids": [
+      "TB-03"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_3": {
+    "title": "Формирование сменных заданий и назначение операций",
+    "source_ids": [
+      "TB-04"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_4": {
+    "title": "Отражение факта выполнения операций, выпуска, расхода и трудозатрат",
+    "source_ids": [
+      "TB-05"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_5": {
+    "title": "Учёт выполнения работ бригадами и персонально",
+    "source_ids": [
+      "TB-06"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_6": {
+    "title": "Кладовые по участкам, ответственность мастеров и инвентаризация",
+    "source_ids": [
+      "TB-08"
+    ],
+    "compression_reason": "semantic_compression"
+  },
+  "topic_7": {
+    "title": "Нерассмотренные вопросы и продолжение встречи",
+    "source_ids": [
+      "TB-09"
+    ],
+    "compression_reason": "semantic_compression"
+  }
+}

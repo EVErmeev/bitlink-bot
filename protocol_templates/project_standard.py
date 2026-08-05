@@ -112,9 +112,17 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
             meeting_type=meeting_type,
         )
 
-    def build_standard_view(self, protocol: Protocol) -> dict:
-        """Public entry point returning the standard JSON view."""
-        return self._build_view(protocol)
+    def build_standard_view(self, protocol: Protocol, llm=None) -> dict:
+        """Public entry point returning the standard JSON view.
+
+        When ``llm`` is provided, applies the optional semantic compression
+        pass to hit the TASK word-reduction targets.
+        """
+        view = self._build_view(protocol)
+        if llm is not None:
+            from services.standard_protocol_llm_compressor import llm_compress_view
+            view = llm_compress_view(view, llm)
+        return view
 
     # ── Validation (standard quality gate) ─────────────────────────────
 
@@ -180,13 +188,20 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
 
     # ── HTML render (9 sections, XHTML storage-safe) ───────────────────
 
-    def render_html(self, protocol: Protocol) -> str:
+    def render_html(self, protocol: Protocol, llm=None) -> str:
         view = self._build_view(protocol)
+        if llm is not None:
+            from services.standard_protocol_llm_compressor import llm_compress_view
+            view = llm_compress_view(view, llm)
+            protocol._standard_compressed_view = view
         protocol.protocol_title = view["protocol_title"]
-        title = view["protocol_title"]
+        return self._render_view_html(view)
 
-        gi = view["general_info"]
+    def _render_view_html(self, view: dict) -> str:
+        """Render the full HTML from an already-built (compressed) view."""
+        title = view["protocol_title"]
         esc = html_mod.escape
+        gi = view["general_info"]
 
         gen_rows = "\n".join(
             f"<tr><th>{esc(k)}</th><td>{esc(v)}</td></tr>"
@@ -220,22 +235,22 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
 
         topic_rows = "\n".join(
             f"<tr><td>{i}</td><td>{esc(g.get('title') or '—')}</td>"
-            f"<td>{_cell(g.get('what_discussed', ''), esc)}</td>"
-            f"<td>{_cell(g.get('conclusion', ''), esc)}</td>"
+            f"<td>{_render_cell(g.get('cell'), esc)}</td>"
+            f"<td>{_render_cell(g.get('conclusion_cell'), esc)}</td>"
             f"<td>{esc(g.get('status', ''))}</td></tr>"
             for i, g in enumerate(view["topic_groups"], 1)
         )
 
         decision_rows = "\n".join(
-            f"<tr><td>{i}</td><td>{_cell(d['decision_text'], esc)}</td>"
-            f"<td>{_cell(d['context_and_basis'], esc)}</td>"
+            f"<tr><td>{i}</td><td>{_render_cell(d.get('cell'), esc, d.get('decision_text', ''))}</td>"
+            f"<td>{_render_cell(None, esc, d.get('context_and_basis', ''))}</td>"
             f"<td>{esc(d['responsible'])}</td><td>{esc(d['deadline'])}</td></tr>"
             for i, d in enumerate(view["decision_groups"], 1)
         )
 
         question_rows = "\n".join(
-            f"<tr><td>{i}</td><td>{_cell(q['question_text'], esc)}</td>"
-            f"<td>{_cell(q.get('what_to_determine', ''), esc)}</td>"
+            f"<tr><td>{i}</td><td>{_render_cell(q.get('cell'), esc, q.get('question_text', ''))}</td>"
+            f"<td>{_render_cell(None, esc, q.get('what_to_determine', ''))}</td>"
             f"<td>{esc(q.get('responsible', ''))}</td>"
             f"<td>{esc(q.get('deadline', ''))}</td>"
             f"<td>{esc(q.get('status', 'Открыт'))}</td></tr>"
@@ -244,17 +259,18 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
 
         risk_rows = "\n".join(
             f"<tr><td>{i}</td><td>{esc(r['risk_type'])}</td>"
-            f"<td>{_cell(r['risk_text'], esc)}</td><td>{_cell(r.get('reason', ''), esc)}</td>"
-            f"<td>{_cell(r.get('impact', ''), esc)}</td>"
-            f"<td>{_cell(r.get('measures', ''), esc)}</td>"
+            f"<td>{_render_cell(r.get('cell'), esc, r.get('risk_text', ''))}</td>"
+            f"<td>{_render_cell(None, esc, r.get('reason', ''))}</td>"
+            f"<td>{_render_cell(None, esc, r.get('impact', ''))}</td>"
+            f"<td>{_render_cell(None, esc, r.get('measures', ''))}</td>"
             f"<td>{esc(r.get('responsible', ''))}</td></tr>"
             for i, r in enumerate(view["risk_groups"], 1)
         )
 
         task_rows = "\n".join(
-            f"<tr><td>{i}</td><td>{_cell(t['task_text'], esc)}</td>"
-            f"<td>{_cell(t.get('basis', ''), esc)}</td>"
-            f"<td>{_cell(t.get('expected_result', ''), esc)}</td>"
+            f"<tr><td>{i}</td><td>{_render_cell(t.get('cell'), esc, t.get('task_text', ''))}</td>"
+            f"<td>{_render_cell(None, esc, t.get('basis', ''))}</td>"
+            f"<td>{_render_cell(None, esc, t.get('expected_result', ''))}</td>"
             f"<td>{esc(t.get('responsible', ''))}</td>"
             f"<td>{esc(t.get('deadline', ''))}</td>"
             f"<td>{esc(t.get('status', 'Не начато'))}</td></tr>"
@@ -332,8 +348,6 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
 </tbody>
 </table>
 """
-        protocol._standard_rendered_headings = list(STANDARD_SECTIONS)
-
         html = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -408,6 +422,26 @@ def _cell(value: str, esc) -> str:
     if not text:
         return "—"
     return esc(text).replace("\n", "<br/>")
+
+
+def _render_cell(cell: dict | None, esc, fallback: str = "") -> str:
+    """Render a structured cell as semantic <p> and <ul><li> blocks.
+
+    Falls back to a single escaped paragraph when no structured cell is present.
+    """
+    if cell and (cell.get("paragraphs") or cell.get("bullets")):
+        parts = []
+        for p in cell.get("paragraphs", []) or []:
+            if str(p).strip():
+                parts.append(f"<p>{esc(str(p))}</p>")
+        bullets = cell.get("bullets", []) or []
+        if bullets:
+            lis = "".join(f"<li>{esc(str(b))}</li>" for b in bullets if str(b).strip())
+            if lis:
+                parts.append(f"<ul>{lis}</ul>")
+        if parts:
+            return "\n".join(parts)
+    return _cell(fallback, esc)
 
 
 # Re-export for potential tooling/tests.

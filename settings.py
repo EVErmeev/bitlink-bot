@@ -73,9 +73,11 @@ ONEBIT_CLI_TIMEOUT_SECONDS: int = int(_str("ONEBIT_CLI_TIMEOUT_SECONDS", "120"))
 PROTOCOL_TEMPLATE: str = _str("PROTOCOL_TEMPLATE", "project_detailed")
 PROTOCOL_MODE: str = _str("PROTOCOL_MODE", "auto")
 PROTOCOL_QUALITY_MODE: str = _str("PROTOCOL_QUALITY_MODE", "advisory")  # off | advisory | strict
+STANDARD_LLM_COMPRESSION: bool = _bool("STANDARD_LLM_COMPRESSION", True)
 DETAILED_WORD_THRESHOLD: float | None = _float_opt("DETAILED_WORD_THRESHOLD")
 DETAILED_DURATION_THRESHOLD: float | None = _float_opt("DETAILED_DURATION_THRESHOLD")
 BATCH_CONTINUE_AFTER_ERROR: bool = _bool("BATCH_CONTINUE_AFTER_ERROR", True)
+REQUESTS_VERIFY_SSL: bool = _bool("REQUESTS_VERIFY_SSL", True)  # False for corporate MITM proxy
 
 # ── Settings validation ──
 

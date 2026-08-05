@@ -508,7 +508,9 @@ def build_standard_view(protocol, *, recording_source: str = "",
             "unsupported_standard_items": 0,
         },
     }
-    return view
+    # Semantic compression + cell structuring pass (deterministic, no re-extraction).
+    from services.standard_protocol_compactor import compact_view
+    return compact_view(view, meeting_type=meeting_type)
 
 
 def _recording_source_label(source_type: str, source_filename: str) -> str:
