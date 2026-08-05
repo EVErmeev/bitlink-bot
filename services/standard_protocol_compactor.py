@@ -221,6 +221,10 @@ def compact_view(view: dict, meeting_type: str = "internal") -> dict:
     Each topic group gets ``cell`` = {paragraphs, bullets, source_item_ids}.
     Decisions/risks/tasks keep compact single-cell text plus ``cell`` where long.
     """
+    from services.standard_protocol_logger import get_logger
+    _log = get_logger("standard.compactor")
+    _log.info("compact_view: meeting_type=%s topics=%d before_whole=%d",
+              meeting_type, len(view.get("topic_groups", [])), visible_word_count(view))
     registers = _register_texts(view)
     out = dict(view)
     topic_groups = []
@@ -262,6 +266,8 @@ def compact_view(view: dict, meeting_type: str = "internal") -> dict:
         "applied": True,
         "meeting_type": meeting_type,
     }
+    _log.info("compact_view: done whole=%d s5=%d", visible_word_count(out),
+              section5_word_count(out))
     return out
 
 

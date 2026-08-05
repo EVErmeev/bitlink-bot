@@ -15,6 +15,9 @@ from services.standard_protocol_compactor import (
     section5_word_count,
     visible_word_count,
 )
+from services.standard_protocol_logger import get_logger
+
+log = get_logger("standard.validation")
 
 _TRUNCATION_RE = re.compile(r"…\s*$|\.\.\.\s*$")
 
@@ -138,4 +141,10 @@ def blocking_report(view: dict, previous: dict | None = None,
     if not report.issues:
         report.add_issue("standard_validation_ok", "Стандартный протокол прошёл gate.",
                          ValidationStatus.PASSED, "standard")
+    log.info("blocking_report: passed=%s issues=%s metrics=%s",
+             report.passed, [i.code for i in report.issues],
+             {k: m.get(k) for k in ("whole_protocol_compression_ratio",
+                                    "section_5_compression_ratio",
+                                    "long_unbroken_cells", "duplicate_paragraphs",
+                                    "sentence_truncation_detected") if k in m})
     return report, m

@@ -17,6 +17,9 @@ from services.standard_protocol_compactor import (
     split_sentences,
     word_count,
 )
+from services.standard_protocol_logger import get_logger
+
+log = get_logger("standard.llm_compressor")
 
 _CHUNK = 12
 _TOPIC_BUDGET = int(os.environ.get("STANDARD_TOPIC_BUDGET", "85"))
@@ -272,6 +275,10 @@ def _apply_cell_results(items: list, results: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def llm_compress_view(view: dict, llm) -> dict:
+    log.info("llm_compress_view: start, topic_budget=%d, topics=%d, decisions=%d, risks=%d, tasks=%d",
+             _TOPIC_BUDGET,
+             len(view.get("topic_groups", [])), len(view.get("decision_groups", [])),
+             len(view.get("risk_groups", [])), len(view.get("task_groups", [])))
     out = dict(view)
 
     # Section 5 topics: compress what-discussed AND conclusion into cells.
@@ -294,6 +301,8 @@ def llm_compress_view(view: dict, llm) -> dict:
                         "source_item_ids": t.get("source_ids", []),
                     }
                     if _numbers(orig) and _numbers(orig) - _numbers(_cell_text(cell)):
+                        log.warning("topic %r dropped figures %s -> retrying",
+                                    t.get("title"), sorted(_numbers(orig) - _numbers(_cell_text(cell))))
                         cell = _retry_preserve_numbers(llm, orig, cell, t.get("source_ids", []))
                     t["cell"] = _split_long_paragraphs(cell)
         for t in topics:
@@ -367,4 +376,5 @@ def llm_compress_view(view: dict, llm) -> dict:
             if it.get("cell"):
                 it["cell"] = _split_long_paragraphs(it["cell"])
 
+    log.info("llm_compress_view: done")
     return out

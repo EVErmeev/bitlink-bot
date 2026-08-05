@@ -5,6 +5,10 @@ from pathlib import Path
 
 import requests
 
+from services.standard_protocol_logger import get_logger
+
+_svc_log = get_logger("processing_service")
+
 from models.batch import BatchItem
 from models.protocol import (
     DecisionItem,
@@ -322,13 +326,20 @@ class ProcessingService:
                 if (template.template_id == "project_standard"
                         and getattr(settings, "STANDARD_LLM_COMPRESSION", False)):
                     render_llm = self.llm
-                html = template.render_html(protocol, llm=render_llm)
+                if render_llm is not None:
+                    html = template.render_html(protocol, llm=render_llm)
+                else:
+                    html = template.render_html(protocol)
                 if not html or "<html" not in html.lower() and "<body" not in html.lower():
                     raise Exception("HTML render produced invalid output")
+                _svc_log.info("render ok: template=%s item=%s html_bytes=%d",
+                              template.template_id, item.display_name, len(html))
             except Exception as e:
                 item.status = "failed"
                 item.error_details = f"HTML generation failed: {e}"
                 result["error"] = str(e)
+                _svc_log.exception("render failed: template=%s item=%s",
+                                   template.template_id, item.display_name)
                 return result
 
             # TECHNICAL SAFETY — always save all artifacts
