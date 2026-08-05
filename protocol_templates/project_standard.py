@@ -100,7 +100,7 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
     def _build_view(self, protocol: Protocol) -> dict:
         from services.protocol_title import detect_meeting_type
         src = self._source_attrs(protocol)
-        meeting_type = detect_meeting_type(
+        meeting_type = getattr(protocol, "_standard_meeting_type", "") or detect_meeting_type(
             getattr(protocol, "client_name", ""),
             getattr(protocol, "project_name", ""),
         )
@@ -110,6 +110,9 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
             source_type=src["source_type"],
             source_filename=src["source_filename"],
             meeting_type=meeting_type,
+            meeting_topic=getattr(protocol, "_standard_meeting_topic", ""),
+            meeting_type_resolution=getattr(protocol, "_standard_meeting_type_resolution", {}),
+            project_resolution=getattr(protocol, "_standard_project_resolution", {}),
         )
 
     def build_standard_view(self, protocol: Protocol, llm=None) -> dict:
@@ -188,16 +191,26 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
 
     # ── HTML render (9 sections, XHTML storage-safe) ───────────────────
 
-    def render_html(self, protocol: Protocol, llm=None) -> str:
+    def render_html(self, protocol: Protocol, llm=None, mode: str = "standalone") -> str:
+        """Render the standard protocol HTML.
+
+        ``mode="standalone"`` produces a full HTML document with exactly one
+        ``<h1>`` page title. ``mode="confluence"`` returns the Confluence storage
+        body WITHOUT the page title (Confluence renders the title itself), so the
+        title never appears twice.
+        """
         view = self._build_view(protocol)
         if llm is not None:
             from services.standard_protocol_llm_compressor import llm_compress_view
             view = llm_compress_view(view, llm)
             protocol._standard_compressed_view = view
         protocol.protocol_title = view["protocol_title"]
-        return self._render_view_html(view)
+        return self._render_view_html(view, mode=mode)
 
-    def _render_view_html(self, view: dict) -> str:
+    def render_storage_html(self, protocol: Protocol, llm=None) -> str:
+        return self.render_html(protocol, llm=llm, mode="confluence")
+
+    def _render_view_html(self, view: dict, mode: str = "standalone") -> str:
         """Render the full HTML from an already-built (compressed) view."""
         title = view["protocol_title"]
         esc = html_mod.escape
@@ -277,9 +290,8 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
             for i, t in enumerate(view["task_groups"], 1)
         )
 
-        sections = f"""<h1>{esc(title)}</h1>
-
-<h2>1. Общая информация</h2>
+        title_h1 = f"<h1>{esc(title)}</h1>\n\n"
+        sections = f"""{title_h1 if mode == 'standalone' else ''}<h2>1. Общая информация</h2>
 <table>
 <thead><tr><th>Ключ</th><th>Значение</th></tr></thead>
 <tbody>
@@ -348,6 +360,10 @@ class ProjectStandardTemplate(BaseProtocolTemplate):
 </tbody>
 </table>
 """
+        if mode == "confluence":
+            # Confluence publishes the page title itself; the storage body must
+            # not repeat it (single visible title).
+            return sections
         html = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -428,6 +444,8 @@ def _render_cell(cell: dict | None, esc, fallback: str = "") -> str:
     """Render a structured cell as semantic <p> and <ul><li> blocks.
 
     Falls back to a single escaped paragraph when no structured cell is present.
+    Paragraphs are the default; a single <ul> appears only for genuine parallel
+    enumeration (``structure_type='list'``).
     """
     if cell and (cell.get("paragraphs") or cell.get("bullets")):
         parts = []
@@ -435,7 +453,7 @@ def _render_cell(cell: dict | None, esc, fallback: str = "") -> str:
             if str(p).strip():
                 parts.append(f"<p>{esc(str(p))}</p>")
         bullets = cell.get("bullets", []) or []
-        if bullets:
+        if bullets and cell.get("structure_type") in ("list", "paragraphs_with_list"):
             lis = "".join(f"<li>{esc(str(b))}</li>" for b in bullets if str(b).strip())
             if lis:
                 parts.append(f"<ul>{lis}</ul>")

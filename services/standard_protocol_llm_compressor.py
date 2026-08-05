@@ -376,5 +376,13 @@ def llm_compress_view(view: dict, llm) -> dict:
             if it.get("cell"):
                 it["cell"] = _split_long_paragraphs(it["cell"])
 
+    # Normalize cell structure: paragraphs by default, bullets only for true
+    # enumerations. This runs after every (LLM or deterministic) pass.
+    from services.standard_protocol_compactor import normalize_cell_structure
+    for key in ("topic_groups", "decision_groups", "risk_groups", "task_groups", "open_questions"):
+        for it in out.get(key, []):
+            if it.get("cell"):
+                it["cell"] = normalize_cell_structure(it["cell"])
+
     log.info("llm_compress_view: done")
     return out

@@ -88,17 +88,31 @@ def extract_short_topic(protocol, fallback: str = "") -> str:
 
 
 def detect_meeting_type(client_name: str, project_name: str = "") -> str:
-    """Return 'internal' or 'external' based on resolved context."""
+    """Return one of 'external' | 'internal' | 'unresolved'.
+
+    An unresolved/empty client is NOT treated as internal (three-state, TASK).
+    """
     client = _norm(client_name)
-    if not client or client.lower() in {
-        "не определено", "неизвестно", "внутренняя встреча", "внутренняя"
+    if client.lower() in {
+        "не определено", "неизвестно", "внутренняя встреча", "внутренняя", ""
     }:
+        return "unresolved"
+    if client.lower() == "первый бит":
         return "internal"
     return "external"
 
 
 def _normalize(value) -> str:
     return _norm(value)
+
+
+def _typo_normalize(value: str) -> str:
+    """Apply only typographic normalisation (TASK): ПервыйБИТ→Первый БИТ,
+    hyphen→en dash, straight quotes→«ёлочки»."""
+    s = value.replace("ПервыйБИТ", "Первый БИТ").replace("Первыйбит", "Первый Бит")
+    s = s.replace("-", " — ").replace(" - ", " — ")
+    s = s.replace('"', "«").replace('"', "»")
+    return re.sub(r"\s+", " ", s).strip()
 
 
 def format_meeting_date(d: date | None) -> str:
@@ -114,42 +128,51 @@ def build_protocol_title(
     project_name: str = "",
     meeting_type: str = "external",
 ) -> str:
-    """Build the single final title shared across HTML/Confluence/Telegram."""
+    """Build the single final title shared across HTML/Confluence/Telegram.
+
+    Formats (TASK §10):
+      external   -> "Протокол от {ДД.ММ.ГГ}. {Клиент} + Первый БИТ — {Тема}"
+      internal   -> "Протокол внутренней встречи от {ДД.ММ.ГГ}. {Тема}"
+      unresolved -> "Протокол от {ДД.ММ.ГГ}. {Тема}"
+    Uses a two-digit year. The topic is a short noun phrase; the meeting purpose
+    is never placed here and no ellipsis is introduced.
+    """
     client = _normalize(client_name)
-    project = _normalize(project_name)
     topic = _norm(short_topic)
     date_str = format(meeting_date.strftime("%d.%m.%Y")) if meeting_date else ""
+    date_short = ""
+    if meeting_date:
+        date_short = meeting_date.strftime("%d.%m.%y")
 
     is_internal = meeting_type == "internal"
+    is_unresolved = meeting_type in ("unresolved", "unknown", "")
 
     if is_internal:
         prefix = "Протокол внутренней встречи"
-        if date_str:
-            return f"{prefix} от {date_str}. {topic}" if topic else f"{prefix} от {date_str}"
-        return f"{prefix}. {topic}" if topic else prefix
+        head = f"{prefix} от {date_short}." if date_short else prefix
+        return _finish(head, topic)
 
-    # external
-    head = "Протокол встречи"
-    if date_str:
-        head = f"{head} от {date_str}."
+    if is_unresolved:
+        head = f"Протокол от {date_short}." if date_short else "Протокол"
+        return _finish(head, topic)
 
-    if topic:
-        head = f"{head} {topic}"
-    else:
-        head = f"{head}"
+    # external: include the counterpart client (Первый БИТ) after the customer.
+    head = f"Протокол от {date_short}." if date_short else "Протокол"
+    parts: list[str] = []
+    if client and client.lower() not in PLACEHOLDER_CLIENT and \
+            client.lower() != "первый бит":
+        parts.append(client)
+    parts.append("Первый БИТ")
+    return _finish(head, " + ".join(parts) + (" — " + topic if topic else ""))
 
-    suffix_parts: list[str] = []
-    if client and client.lower() not in PLACEHOLDER_CLIENT:
-        if project and project.lower() not in PLACEHOLDER_CLIENT:
-            suffix_parts.append(f"{client}, {project}")
-        else:
-            suffix_parts.append(client)
-    if suffix_parts:
-        head += " — " + ", ".join(suffix_parts)
 
-    if head == "Протокол встречи от ":
-        return "Протокол встречи"
-    return head
+def _finish(head: str, body: str) -> str:
+    if not body:
+        return head
+    # ensure a period separator between the head and the topic
+    if not head.endswith("."):
+        head = head.rstrip() + "."
+    return _typo_normalize(f"{head} {body}")
 
 
 def build_recording_source(source_type: str = "local_transcript",

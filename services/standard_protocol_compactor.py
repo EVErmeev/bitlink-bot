@@ -236,16 +236,10 @@ def compact_view(view: dict, meeting_type: str = "internal") -> dict:
         conc_paras = _split_cell(conc, meeting_type)
         # keep status normalized
         status = _norm_status(g.get("status", ""))
-        g["cell"] = {
-            "paragraphs": paras,
-            "bullets": [],
-            "source_item_ids": g.get("source_ids", []),
-        }
-        g["conclusion_cell"] = {
-            "paragraphs": conc_paras,
-            "bullets": [],
-            "source_item_ids": g.get("source_ids", []),
-        }
+        g["cell"] = normalize_cell_structure(
+            {"paragraphs": paras, "bullets": [], "source_item_ids": g.get("source_ids", [])})
+        g["conclusion_cell"] = normalize_cell_structure(
+            {"paragraphs": conc_paras, "bullets": [], "source_item_ids": g.get("source_ids", [])})
         g["status"] = status
         # visible single-text keep for metrics/render back-compat
         g["what_discussed"] = "\n".join(paras)
@@ -277,7 +271,8 @@ def _attach_cells(items, main_key: str, basis_key: str) -> list[dict]:
         it = dict(it)
         main = _split_cell(it.get(main_key, ""), "")
         basis = _split_cell(it.get(basis_key, ""), "")
-        it["cell"] = {"paragraphs": main, "bullets": [], "source_item_ids": it.get("source_ids", [])}
+        it["cell"] = normalize_cell_structure(
+            {"paragraphs": main, "bullets": [], "source_item_ids": it.get("source_ids", [])})
         res.append(it)
     return res
 
@@ -288,9 +283,114 @@ def _attach_question_cells(items: list[dict]) -> list[dict]:
         it = dict(it)
         q = _split_cell(it.get("question_text", ""), "")
         det = _split_cell(it.get("what_to_determine", ""), "")
-        it["cell"] = {"paragraphs": q + det, "bullets": [], "source_item_ids": it.get("source_ids", [])}
+        it["cell"] = normalize_cell_structure(
+            {"paragraphs": q + det, "bullets": [], "source_item_ids": it.get("source_ids", [])})
         res.append(it)
     return res
+
+
+# ----------------------------------------------------------------------
+# Cell structure normalization
+# ----------------------------------------------------------------------
+
+def _looks_like_enumeration(bullets: list[str]) -> bool:
+    """True only when the bullets are genuine parallel enumeration items.
+
+    Paragraphs are the default; bullets are kept ONLY for true lists (short
+    parallel items, e.g. variants/requirements/dates/documents), otherwise they
+    are folded back into paragraphs. Speaker statements and long prose are never
+    kept as a list.
+    """
+    items = [str(b).strip() for b in bullets if str(b).strip()]
+    if len(items) < 2:
+        return False
+    # A real list item is compact and does not itself carry a full sentence.
+    if any(len(b) > 140 for b in items):
+        return False
+    # Speaker statements ("Иванов: ...", "Заказчик: ...") are paragraphs.
+    if any(re.match(r"^[А-ЯЁA-Z][А-ЯЁа-яёA-Za-z]+\s*:", b) for b in items):
+        return False
+    # Genuine enumerations are short parallel items (<=12 words). Anything
+    # longer is prose and must render as paragraphs.
+    lens = [len(b.split()) for b in items]
+    if any(l > 12 for l in lens):
+        return False
+    # Items should be roughly parallel in length (avoid dumping a paragraph in).
+    if max(lens) - min(lens) > 8:
+        return False
+    return True
+
+
+_LIST_INTRO_PHRASES = (
+    "следующие варианты", "рассмотрены следующие", "варианты:", "перечень",
+    "список документов", "следующие документы", "следующие шаги", "следующие действия",
+)
+
+
+def _is_list_intro(text: str) -> bool:
+    low = (text or "").lower()
+    return any(p in low for p in _LIST_INTRO_PHRASES)
+
+
+def normalize_cell_structure(cell: dict | None, source_text: str = "") -> dict:
+    """Normalize a structured cell so paragraphs are the default presentation.
+
+    Bullets are kept only for genuine enumerations (``structure_type='list'``
+    or ``'paragraphs_with_list'`` with a ``list_reason``). Otherwise all text is
+    rendered as paragraphs (``structure_type='paragraphs'``). A mixed cell (a
+    leading paragraph plus bullets) is kept as a list ONLY when the leading
+    paragraph is an explicit list-intro phrase; otherwise the bullets are folded
+    back into paragraphs.
+    """
+    if not cell:
+        return {"paragraphs": [], "bullets": [], "structure_type": "paragraphs",
+                "list_reason": "", "source_item_ids": []}
+    cell = dict(cell)
+    paras = [str(p).strip() for p in (cell.get("paragraphs") or []) if str(p).strip()]
+    bullets = [str(b).strip() for b in (cell.get("bullets") or []) if str(b).strip()]
+    genuine = bool(bullets) and _looks_like_enumeration(bullets)
+    # A list needs a true enumeration; if there is a leading paragraph it must
+    # explicitly introduce the list.
+    if paras and bullets and not any(_is_list_intro(p) for p in paras):
+        genuine = False
+    if genuine:
+        structure_type = "list" if not paras else "paragraphs_with_list"
+        reason = "parallel enumeration items"
+    else:
+        paras = paras + bullets
+        bullets = []
+        structure_type = "paragraphs"
+        reason = ""
+    cell["paragraphs"] = paras
+    cell["bullets"] = bullets
+    cell["structure_type"] = structure_type
+    cell["list_reason"] = reason
+    cell["source_item_ids"] = cell.get("source_item_ids", [])
+    return cell
+
+
+def _render_cell_html(cell: dict | None, esc, fallback: str = "") -> str:
+    """Render a normalized structured cell as semantic <p> blocks, with a
+    single <ul> only for genuine parallel enumeration."""
+    if not cell or not (cell.get("paragraphs") or cell.get("bullets")):
+        return _cell_para(fallback, esc)
+    parts = []
+    for p in cell.get("paragraphs", []) or []:
+        if str(p).strip():
+            parts.append(f"<p>{esc(str(p))}</p>")
+    bullets = cell.get("bullets", []) or []
+    if bullets and _looks_like_enumeration(bullets):
+        lis = "".join(f"<li>{esc(str(b))}</li>" for b in bullets if str(b).strip())
+        if lis:
+            parts.append(f"<ul>{lis}</ul>")
+    if parts:
+        return "\n".join(parts)
+    return _cell_para(fallback, esc)
+
+
+def _cell_para(text: str, esc) -> str:
+    t = _norm(text)
+    return f"<p>{esc(t)}</p>" if t else ""
 
 
 # ----------------------------------------------------------------------

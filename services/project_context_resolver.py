@@ -127,6 +127,17 @@ def _resolve_deterministic(
     known_profiles: list,
 ) -> ProjectContextResolution | None:
     combined = "\n".join([transcript_text, source_filename, source_title])
+    # participant names AND their organisation sides participate in matching
+    # (a side like "УралДронЗавод" can be the client alias even when the
+    # transcript text itself is generic).
+    for p in participants or []:
+        if isinstance(p, dict):
+            side = p.get("side") or p.get("organization") or ""
+            name = p.get("name") or ""
+            if side:
+                combined += "\n" + str(side)
+            if name:
+                combined += "\n" + str(name)
     haystack = _norm(combined)
     if not haystack:
         return None
@@ -158,34 +169,70 @@ def _resolve_deterministic(
     )
 
 
-def _resolve_with_llm(llm_client, known_profiles: list) -> ProjectContextResolution | None:
-    """Optional LLM classification among known profiles (kept lightweight)."""
+def _resolve_with_llm(llm_client, known_profiles: list,
+                      transcript_text: str = "", source_filename: str = "",
+                      source_title: str = "", participants: list | None = None,
+                      detected_systems: list | None = None,
+                      detected_processes: list | None = None) -> ProjectContextResolution | None:
+    """LLM classification among known profiles using the real meeting context."""
     try:
         if llm_client is None or not known_profiles:
             return None
         labels = ", ".join(
-            f"{p.get('client_name')} / {p.get('project_name')}" for p in known_profiles
+            f"{p.get('profile_id')} ({p.get('client_name')} / {p.get('project_name')})"
+            for p in known_profiles
         )
-        prompt = (
-            "По перечню известных проектов выбери один, который соответствует контексту "
-            "встречи. Ответь JSON-объектом с ключами profile_id и reason, "
-            "или {\"profile_id\": null}, если не уверен. "
-            f"Известные проекты: {labels}"
+        participants = participants or []
+        p_names = ", ".join(
+            p.get("name") if isinstance(p, dict) else str(p) for p in participants
+        )
+        sides = ", ".join(
+            (p.get("side") or p.get("organization") or "")
+            for p in participants if isinstance(p, dict)
+        )
+        sys_txt = ", ".join(detected_systems or [])
+        proc_txt = ", ".join(detected_processes or [])
+        excerpt = (transcript_text or "")[:4000]
+        user = (
+            "Определи по контексту встречи, к какому известному профилю она относится.\n"
+            f"Имя файла: {source_filename}\nНазвание: {source_title}\n"
+            f"Участники: {p_names}\nСтороны: {sides}\nСистемы: {sys_txt}\n"
+            f"Процессы/темы: {proc_txt}\n\nФрагмент расшифровки:\n{excerpt}\n\n"
+            "Ответь JSON: {\"profile_id\": string|null, \"client_name\": string, "
+            "\"reason\": string, \"confidence\": high|medium|low}. "
+            "Верни profile_id null, если нет уверенности."
         )
         data, _ = llm_client.generate_json(
-            system_prompt=prompt,
-            user_prompt="Определи проект по контексту встречи.",
+            system_prompt=(
+                "Ты определяешь клиента и проект встречи по реальному контексту. "
+                "Известные профили: " + labels
+            ),
+            user_prompt=user,
             json_schema={
                 "type": "object",
-                "properties": {"profile_id": {"type": "string"}, "reason": {"type": "string"}},
+                "properties": {
+                    "profile_id": {"type": ["string", "null"]},
+                    "client_name": {"type": "string"},
+                    "project_name": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "confidence": {"type": "string"},
+                },
+                "required": ["profile_id", "confidence"],
             },
             temperature=0.0,
             max_retries=1,
         )
-        pid = (data or {}).get("profile_id")
-        if not pid:
-            return None
-        profile = next((p for p in known_profiles if p.get("profile_id") == pid), None)
+        data = data or {}
+        pid = data.get("profile_id")
+        profile = next((p for p in known_profiles if p.get("profile_id") == pid), None) if pid else None
+        if not profile and (data.get("client_name") and data["client_name"] not in (_UNRESOLVED, "")):
+            return ProjectContextResolution(
+                client_name=data["client_name"],
+                project_name=data.get("project_name", _UNRESOLVED),
+                confidence=data.get("confidence", "low"),
+                resolution_method="llm_freeform",
+                evidence=[f"LLM определил клиента: {data['client_name']}"],
+            )
         if not profile:
             return None
         return ProjectContextResolution(
@@ -193,7 +240,7 @@ def _resolve_with_llm(llm_client, known_profiles: list) -> ProjectContextResolut
             project_name=profile.get("project_name", _UNRESOLVED),
             confidence="medium",
             resolution_method="known_profile_llm_match",
-            evidence=["LLM-классификация выбрала профиль"],
+            evidence=[f"LLM выбрал профиль: {pid}"],
             matched_profile_id=pid,
         )
     except Exception:
@@ -208,11 +255,14 @@ def resolve_project_context(
     participants: list | None = None,
     known_profiles: list | None = None,
     llm_client=None,
+    detected_systems: list | None = None,
+    detected_processes: list | None = None,
 ) -> ProjectContextResolution:
     """Resolve client/project context for a meeting.
 
     Priority: source text mentions -> title/file -> registry keywords ->
-    participants/systems/terms -> LLM classification among profiles.
+    participants/systems/terms -> LLM classification among profiles (with the
+    full meeting context).
     """
     source_metadata = source_metadata or {}
     participants = participants or []
@@ -225,7 +275,15 @@ def resolve_project_context(
     if resolved and resolved.confidence in ("high", "medium"):
         return resolved
 
-    llm_res = _resolve_with_llm(llm_client, profiles)
+    llm_res = _resolve_with_llm(
+        llm_client, profiles,
+        transcript_text=transcript_text,
+        source_filename=filename,
+        source_title=title,
+        participants=participants,
+        detected_systems=detected_systems,
+        detected_processes=detected_processes,
+    )
     if llm_res:
         return llm_res
 

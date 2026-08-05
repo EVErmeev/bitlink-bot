@@ -1,0 +1,14 @@
+{
+  "client_name": "УралДронЗавод",
+  "project_name": "Внедрение 1С:ERP",
+  "confidence": "high",
+  "resolution_method": "known_profile_match",
+  "evidence": [
+    "найден alias клиента: УралДронЗавод",
+    "найден alias проекта: УралДронЗавод + ПервыйБИТ",
+    "совпали ключевые термины (6): производство, диспетчирование этапов, сменные задания",
+    "упомянуты системы (1)"
+  ],
+  "matched_profile_id": "ural-drone-erp",
+  "alternatives": []
+}

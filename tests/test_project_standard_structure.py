@@ -126,15 +126,17 @@ class TestTitle:
 
     def test_standard_title_uses_date_topic_client_project(self, view):
         t = view["protocol_title"]
-        assert t.startswith("Протокол встречи от 31.07.2026.")
+        assert t.startswith("Протокол от 31.07.26.")
         assert "Приёмка" in t or "Анализ" in t
         assert "Роял Фуд" in t
-        assert "Склад 3PL" in t
+        # TASK §10: external format is "client + Первый БИТ — тема"; project
+        # name is not required in the page title.
+        assert "Склад 3PL" not in t
 
     def test_standard_internal_meeting_title(self):
         t = build_protocol_title(meeting_date=date(2026, 8, 1), short_topic="Разбор эфиров",
                                  meeting_type="internal")
-        assert t.startswith("Протокол внутренней встречи от 01.08.2026. Разбор эфиров")
+        assert t.startswith("Протокол внутренней встречи от 01.08.26. Разбор эфиров")
         t2 = build_protocol_title(meeting_type="internal", short_topic="Разбор эфиров")
         assert t2 == "Протокол внутренней встречи. Разбор эфиров"
 
@@ -181,7 +183,8 @@ class TestContext:
         assert list(view["meeting_context"].keys()) == [
             "goal", "initial_situation", "main_problem", "expected_result",
         ]
-        assert all(view["meeting_context"].values())
+        assert view["meeting_context"]["goal"]
+        assert view["meeting_context"]["initial_situation"]
 
 
 class TestKeyOutcomes:

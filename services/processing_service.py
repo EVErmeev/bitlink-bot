@@ -284,26 +284,72 @@ class ProcessingService:
                     pass
 
             if template.template_id == "project_standard":
-                # Shared canonical title builder — never a technical filename.
-                from services.protocol_title import (
-                    build_protocol_title,
-                    detect_meeting_type,
-                    extract_short_topic,
+                # (Re)resolve client/project context with the FULL meeting
+                # evidence (transcript, filename, title, participants, systems)
+                # and the LLM fallback. Overrides an earlier unresolved value.
+                from services.project_context_resolver import resolve_project_context
+                from services.meeting_type_resolver import resolve_meeting_type
+                from services.meeting_topic_resolver import resolve_meeting_topic
+
+                filename = item.source_path.name if item.source_path else (item.display_name or "")
+                final_res = resolve_project_context(
+                    transcript_text=transcript_text,
+                    source_filename=filename,
+                    source_title=item.display_name,
+                    source_metadata={"display_name": item.display_name},
+                    participants=protocol.participants,
+                    llm_client=self.llm,
                 )
-                protocol._standard_source_type = item.source_type
-                protocol._standard_source_filename = (
-                    item.source_path.name if item.source_path else (item.display_name or "")
-                )
-                protocol._standard_recording_source = ""
-                meeting_type = detect_meeting_type(
-                    protocol.client_name, protocol.project_name
-                )
-                full_title = build_protocol_title(
-                    meeting_date=protocol.meeting_date,
-                    short_topic=extract_short_topic(protocol),
+                if final_res.client_name not in ("", "Не определено"):
+                    protocol.client_name = final_res.client_name
+                if final_res.project_name not in ("", "Не определено"):
+                    protocol.project_name = final_res.project_name
+
+                mt, mt_conf, mt_evidence = resolve_meeting_type(
+                    transcript_text=transcript_text,
+                    source_filename=filename,
+                    source_title=item.display_name,
+                    participants=protocol.participants,
                     client_name=protocol.client_name,
                     project_name=protocol.project_name,
-                    meeting_type=meeting_type,
+                    known_profile_id=final_res.matched_profile_id,
+                )
+                meeting_topic = resolve_meeting_topic(
+                    meeting_topic=getattr(protocol, "meeting_topic", ""),
+                    source_filename=filename,
+                    source_title=item.display_name,
+                    topic_blocks=protocol.topic_blocks,
+                    meeting_purpose=protocol.meeting_purpose,
+                    llm=self.llm,
+                )
+
+                protocol._standard_source_type = item.source_type
+                protocol._standard_source_filename = filename
+                protocol._standard_recording_source = ""
+                protocol._standard_meeting_type = mt
+                protocol._standard_meeting_topic = meeting_topic
+                protocol._standard_meeting_type_resolution = {
+                    "meeting_type": mt, "confidence": mt_conf, "evidence": mt_evidence,
+                }
+                protocol._standard_project_resolution = {
+                    "client_name": protocol.client_name,
+                    "project_name": protocol.project_name,
+                    "confidence": final_res.confidence,
+                    "method": final_res.resolution_method,
+                    "evidence": final_res.evidence,
+                }
+
+                from services.standard_context_resolver import resolve_standard_context
+                protocol._standard_context = resolve_standard_context(
+                    protocol, transcript_text, llm=self.llm)
+
+                from services.protocol_title import build_protocol_title
+                full_title = build_protocol_title(
+                    meeting_date=protocol.meeting_date,
+                    short_topic=meeting_topic,
+                    client_name=protocol.client_name,
+                    project_name=protocol.project_name,
+                    meeting_type=mt,
                 )
                 protocol.protocol_title = full_title
                 confluence_title = full_title
@@ -332,6 +378,13 @@ class ProcessingService:
                     html = template.render_html(protocol)
                 if not html or "<html" not in html.lower() and "<body" not in html.lower():
                     raise Exception("HTML render produced invalid output")
+                # Confluence publishes the page title itself, so its storage body
+                # must not repeat the <h1> (single visible title).
+                confluence_storage = html
+                if template.template_id == "project_standard":
+                    import re as _re
+                    confluence_storage = _re.sub(r"<h1[^>]*>.*?</h1>", "", html,
+                                                 count=1, flags=_re.DOTALL)
                 _svc_log.info("render ok: template=%s item=%s html_bytes=%d",
                               template.template_id, item.display_name, len(html))
             except Exception as e:
@@ -402,7 +455,7 @@ class ProcessingService:
                         parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
                         page = self.confluence.create_page(
                             title=confluence_title,
-                            storage_html=html,
+                            storage_html=confluence_storage,
                             parent_page_id=parent_id,
                         )
                         result_url = page.get("url", "")

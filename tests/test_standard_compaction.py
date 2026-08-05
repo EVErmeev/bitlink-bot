@@ -183,9 +183,17 @@ def test_standard_paragraph_split_is_not_sentence_count_based():
 
 
 def test_standard_list_renders_as_ul_li():
-    cell = {"paragraphs": [], "bullets": ["а", "б"]}
+    cell = {"paragraphs": [], "bullets": ["а", "б"], "structure_type": "list",
+            "list_reason": "перечень требований"}
     out = _render_cell(cell, _html_escape)
     assert "<ul>" in out and "<li>а</li>" in out
+
+
+def test_standard_untyped_bullets_render_as_paragraphs():
+    # bullets without a list structure_type must not become <ul>/<li>.
+    cell = {"paragraphs": [], "bullets": ["а", "б"]}
+    out = _render_cell(cell, _html_escape)
+    assert "<ul>" not in out and "<li>" not in out
 
 
 def test_standard_paragraphs_render_as_p_inside_td():

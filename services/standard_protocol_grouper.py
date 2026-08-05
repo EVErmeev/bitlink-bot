@@ -420,7 +420,10 @@ def _group_group(group_type, index, source_ids, semantic_theme, grouping_reason,
 def build_standard_view(protocol, *, recording_source: str = "",
                         meeting_type: str = "external",
                         source_type: str = "local_transcript",
-                        source_filename: str = "") -> dict:
+                        source_filename: str = "",
+                        meeting_topic: str = "",
+                        meeting_type_resolution: dict | None = None,
+                        project_resolution: dict | None = None) -> dict:
     """Build the standard JSON view from a canonical Protocol.
 
     Requires ``protocol.client_name``, ``protocol.project_name`` and the
@@ -429,7 +432,10 @@ def build_standard_view(protocol, *, recording_source: str = "",
     """
     from services.protocol_title import build_protocol_title, extract_short_topic
 
-    short_topic = extract_short_topic(protocol, fallback=protocol.meeting_purpose or "")
+    if meeting_topic:
+        short_topic = _norm(meeting_topic)
+    else:
+        short_topic = extract_short_topic(protocol, fallback=protocol.meeting_purpose or "")
     client = _norm(getattr(protocol, "client_name", ""))
     project = _norm(getattr(protocol, "project_name", ""))
     title = build_protocol_title(
@@ -459,12 +465,19 @@ def build_standard_view(protocol, *, recording_source: str = "",
     participants = filter_confirmed_participants(getattr(protocol, "participants", []))
 
     goal = _norm(getattr(protocol, "meeting_purpose", ""))
-    initial = _norm(getattr(protocol, "meeting_context", ""))
-    # Separate "main problem" and "expected result" when current_state present.
-    main_problem = initial
+    context = getattr(protocol, "_standard_context", None) or {}
+    initial = _norm(context.get("initial_situation")) or _norm(getattr(protocol, "meeting_context", ""))
+    main_problem = _norm(context.get("main_problem")) or _norm(getattr(protocol, "current_state", "")) or initial
     expected_result = _norm(getattr(protocol, "current_state", ""))
     if expected_result and main_problem == expected_result:
         expected_result = ""
+
+    if meeting_type == "internal":
+        client_label = "Внутренняя встреча"
+    elif meeting_type == "external":
+        client_label = client or "Не определено"
+    else:
+        client_label = "Не определено"
 
     key_outcomes = _split_outcomes(getattr(protocol, "key_outcomes", ""))
 
@@ -478,7 +491,7 @@ def build_standard_view(protocol, *, recording_source: str = "",
         "template_id": "project_standard",
         "protocol_title": title,
         "general_info": {
-            "client_name": client or "Не определено",
+            "client_name": client_label,
             "topic_project": short_topic + (f" — {project}" if project else ""),
             "meeting_datetime_place": dt_place or "—",
             "recording_source": recording_source or "—",
