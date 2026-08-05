@@ -1,0 +1,194 @@
+from pathlib import Path
+
+from models.batch import BatchItem
+from services.runtime_config import RuntimeConfig
+
+
+def run_preflight(items: list[BatchItem], config: RuntimeConfig) -> dict:
+    errors = []
+    warnings = []
+    has_blocking = False
+    items_checked = 0
+
+    for item in items:
+        if item.status in ("completed", "skipped"):
+            continue
+        items_checked += 1
+        item_errors, item_warnings, item_blocking = _check_item(item, config)
+        errors.extend(item_errors)
+        warnings.extend(item_warnings)
+        if item_blocking:
+            has_blocking = True
+
+    if items_checked == 0:
+        errors.append("Нет элементов для обработки (все completed/skipped)")
+        has_blocking = True
+
+    has_warnings = len(warnings) > 0
+
+    return {
+        "passed": not has_blocking,
+        "has_warnings": has_warnings,
+        "has_blocking": has_blocking,
+        "errors": errors,
+        "warnings": warnings,
+        "items_checked": items_checked,
+        "items_total": len(items),
+    }
+
+
+def _check_confluence_publish(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list[str], bool]:
+    """Confluence publish prerequisites, including a live parent-page check."""
+    errors: list[str] = []
+    warnings: list[str] = []
+    blocking = False
+    if item.dry_run or config.confluence_provider == "mock":
+        return errors, warnings, blocking
+    if not config.confluence_base_url or not config.confluence_token:
+        errors.append(f"{item.display_name}: Confluence REST требует BASE_URL и TOKEN")
+        blocking = True
+        return errors, warnings, blocking
+    if not config.confluence_parent_page_id:
+        warnings.append(f"{item.display_name}: parent_page_id не указан")
+        return errors, warnings, blocking
+    try:
+        import requests
+        from services.confluence_service import normalize_confluence_base_url
+        base = normalize_confluence_base_url(config.confluence_base_url)
+        resp = requests.get(
+            f"{base}/rest/api/content/{config.confluence_parent_page_id}",
+            headers={"Authorization": f"Bearer {config.confluence_token}"},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            warnings.append(
+                f"{item.display_name}: родительская страница {config.confluence_parent_page_id} "
+                f"недоступна (HTTP {resp.status_code}) — публикация под неё может не пройти"
+            )
+    except Exception:
+        warnings.append(f"{item.display_name}: не удалось проверить родительскую страницу Confluence")
+    return errors, warnings, blocking
+
+
+def _check_item(item: BatchItem, config: RuntimeConfig) -> tuple[list[str], list[str], bool]:
+    errors: list[str] = []
+    warnings: list[str] = []
+    blocking = False
+
+    st = item.source_type
+
+    # File checks
+    if st in ("local_transcript", "local_video"):
+        if not item.source_path:
+            errors.append(f"{item.display_name}: путь к файлу не указан")
+            return errors, warnings, True
+        fpath = Path(item.source_path)
+        if not fpath.exists():
+            errors.append(f"{item.display_name}: файл не найден: {item.source_path}")
+            return errors, warnings, True
+        if fpath.is_dir():
+            errors.append(f"{item.display_name}: указан каталог, а не файл")
+            return errors, warnings, True
+        if fpath.stat().st_size == 0:
+            errors.append(f"{item.display_name}: файл пуст")
+            return errors, warnings, True
+        try:
+            with open(fpath, "rb") as f:
+                f.read(1)
+        except Exception:
+            errors.append(f"{item.display_name}: файл недоступен для чтения")
+            return errors, warnings, True
+
+    # Template check
+    from protocol_templates.registry import TemplateRegistry
+    tmpl = TemplateRegistry().get(item.protocol_template)
+    if not tmpl:
+        errors.append(f"{item.display_name}: шаблон {item.protocol_template} не найден")
+        return errors, warnings, True
+
+    # Service checks per source type
+    if st == "local_transcript":
+        # LLM provider-specific checks
+        if config.llm_provider == "mock":
+            warnings.append(f"{item.display_name}: LLM в mock-режиме")
+        elif config.llm_provider == "onebit_newton_cli":
+            if not config.onebit_cli_path:
+                errors.append(f"{item.display_name}: Newton CLI path не указан")
+                blocking = True
+            elif not Path(config.onebit_cli_path).exists():
+                errors.append(f"{item.display_name}: Newton CLI не найден: {config.onebit_cli_path}")
+                blocking = True
+            if not config.onebit_token:
+                errors.append(f"{item.display_name}: ONEBIT_NEWTON_TOKEN не указан")
+                blocking = True
+        elif config.llm_provider == "openai_compatible":
+            if not config.llm_api_url or not config.llm_api_key:
+                errors.append(f"{item.display_name}: OpenAI требует LLM_API_URL и LLM_API_KEY")
+                blocking = True
+
+        # Confluence only if not dry-run
+        if not item.dry_run and config.confluence_provider != "mock":
+            c_err, c_warn, c_block = _check_confluence_publish(item, config)
+            errors.extend(c_err)
+            warnings.extend(c_warn)
+            if c_block:
+                blocking = True
+        # Telegram only if send_telegram
+        if item.send_telegram and config.telegram_provider == "real":
+            if not config.telegram_bot_token or not config.telegram_chat_id:
+                warnings.append(f"{item.display_name}: Telegram real-режим без токена/chat_id")
+
+    elif st == "local_video":
+        if config.transcription_provider == "mock":
+            warnings.append(f"{item.display_name}: Транскрибация в mock-режиме")
+        elif config.transcription_provider in ("disabled",):
+            errors.append(f"{item.display_name}: Транскрибация ({config.transcription_provider}) — видео не может быть обработано")
+            blocking = True
+
+        # LLM provider-specific checks
+        if config.llm_provider == "mock":
+            warnings.append(f"{item.display_name}: LLM в mock-режиме")
+        elif config.llm_provider == "onebit_newton_cli":
+            if not config.onebit_cli_path:
+                errors.append(f"{item.display_name}: Newton CLI path не указан")
+                blocking = True
+            elif not Path(config.onebit_cli_path).exists():
+                errors.append(f"{item.display_name}: Newton CLI не найден: {config.onebit_cli_path}")
+                blocking = True
+            if not config.onebit_token:
+                errors.append(f"{item.display_name}: ONEBIT_NEWTON_TOKEN не указан")
+                blocking = True
+        elif config.llm_provider == "openai_compatible":
+            if not config.llm_api_url or not config.llm_api_key:
+                errors.append(f"{item.display_name}: OpenAI требует LLM_API_URL и LLM_API_KEY")
+                blocking = True
+
+        # Confluence same as transcript
+        if not item.dry_run and config.confluence_provider != "mock":
+            c_err, c_warn, c_block = _check_confluence_publish(item, config)
+            errors.extend(c_err)
+            warnings.extend(c_warn)
+            if c_block:
+                blocking = True
+        # Telegram same as transcript
+        if item.send_telegram and config.telegram_provider == "real":
+            if not config.telegram_bot_token or not config.telegram_chat_id:
+                warnings.append(f"{item.display_name}: Telegram real-режим без токена/chat_id")
+
+    elif st == "bitlink":
+        if config.bitlink_provider == "mock":
+            warnings.append(f"{item.display_name}: BIT.Link в mock-режиме")
+        elif config.bitlink_provider == "real":
+            if not config.bitlink_base_url:
+                errors.append(f"{item.display_name}: BIT.Link real требует BASE_URL")
+                blocking = True
+        # Transcription required for bitlink transcript
+        if config.transcription_provider in ("disabled",):
+            warnings.append(f"{item.display_name}: Транскрибация ({config.transcription_provider}) — транскрибация может быть недоступна")
+
+    # Mixed mode protection
+    if config.is_demo_for_source(item.source_type) and not item.dry_run:
+        item.dry_run = True
+        warnings.append(f"{item.display_name}: demo-режим — автоматически включён dry-run для защиты от публикации mock-контента")
+
+    return errors, warnings, blocking

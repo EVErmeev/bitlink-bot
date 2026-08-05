@@ -1,0 +1,14 @@
+{
+  "new_visible_word_count": 3414,
+  "new_section_5_word_count": 625,
+  "long_unbroken_cells": 0,
+  "long_cell_details": [],
+  "duplicate_paragraphs": 0,
+  "semantic_duplication_ratio": 0.0,
+  "sentence_truncation_detected": false,
+  "sentence_truncation_samples": [],
+  "whole_protocol_compression_ratio": 0.7282,
+  "whole_protocol_reduction_pct": 27.2,
+  "section_5_compression_ratio": 0.45,
+  "section_5_reduction_pct": 55.0
+}

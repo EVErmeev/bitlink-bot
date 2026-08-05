@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff mypy
+
+      - name: Python compileall
+        run: python -m compileall .
+
+      - name: JSON manifest validation
+        run: python -c "import json; json.load(open('docs/opencode/manifest.json',encoding='utf-8')); print('JSON: PASS')"
+
+      - name: Validate manifest schema
+        run: python -c "import json,jsonschema; m=json.load(open('docs/opencode/manifest.json',encoding='utf-8')); s=json.load(open('docs/opencode/schemas/manifest.schema.json',encoding='utf-8')); jsonschema.validate(m,s); print('Schema: PASS')"
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Windows launcher smoke test
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: call start_app.bat --startup-check
+
+      - name: Ruff check
+        run: ruff check .
+
+      - name: Mypy check
+        run: mypy . --ignore-missing-imports

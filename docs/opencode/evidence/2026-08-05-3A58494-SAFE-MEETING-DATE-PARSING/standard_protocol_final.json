@@ -1,0 +1,93 @@
+{
+  "template_id": "project_standard",
+  "protocol_title": "Протокол от 31.07.26. УралДронЗавод + Первый БИТ — 31_15_26_10_30_00_video.mp4",
+  "general_info": {
+    "client_name": "УралДронЗавод",
+    "topic_project": "31_15_26_10_30_00_video.mp4 — Внедрение 1С:ERP",
+    "meeting_datetime_place": "31.07.2026, онлайн",
+    "recording_source": "Локальная расшифровка: 31_15_26_10_30_00_video.mp4"
+  },
+  "participants": [
+    {
+      "side": "Первый БИТ",
+      "position": "Аналитик",
+      "full_name": "Евгений"
+    },
+    {
+      "side": "Заказчик",
+      "position": "Диспетчер",
+      "full_name": "Александр"
+    }
+  ],
+  "meeting_context": {
+    "goal": "Обсудить производственный блок.",
+    "initial_situation": "Продолжается обследование и моделирование производственного блока (процессов) в контексте «Внедрение 1С:ERP». В работе находятся: Диспетчирование этапов. Часть сценариев подтверждена, по отдельным требованиям требуется дополнительная проверка или доработка.",
+    "main_problem": "Типовой функционал не полностью покрывает требуемую схему: требуется уточнение, настройка либо функциональная доработка по ряду производственных сценариев.",
+    "expected_result": "Продолжается обследование."
+  },
+  "key_outcomes": [
+    "Согласовано диспетчирование этапов."
+  ],
+  "topic_groups": [
+    {
+      "standard_item_id": "standard-topic-1",
+      "standard_item_type": "topic",
+      "source_ids": [
+        "t1"
+      ],
+      "semantic_theme": "Диспетчирование этапов",
+      "grouping_reason": "уникальная тема (группировка не требуется)",
+      "preserved_facts": [
+        "Рассмотрен процесс диспетчера."
+      ],
+      "preserved_responsibles": [],
+      "preserved_deadlines": [],
+      "coverage_status": "covered",
+      "title": "Диспетчирование этапов",
+      "what_discussed": "Рассмотрен процесс диспетчера.",
+      "conclusion": "Согласовано.",
+      "status": "Согласовано",
+      "cell": {
+        "paragraphs": [
+          "Рассмотрен процесс диспетчера."
+        ],
+        "bullets": [],
+        "source_item_ids": [
+          "t1"
+        ],
+        "structure_type": "paragraphs",
+        "list_reason": ""
+      },
+      "conclusion_cell": {
+        "paragraphs": [
+          "Согласовано."
+        ],
+        "bullets": [],
+        "source_item_ids": [
+          "t1"
+        ],
+        "structure_type": "paragraphs",
+        "list_reason": ""
+      }
+    }
+  ],
+  "decision_groups": [],
+  "open_questions": [],
+  "risk_groups": [],
+  "task_groups": [],
+  "_debug": {
+    "client_name": "УралДронЗавод",
+    "project_name": "Внедрение 1С:ERP",
+    "detailed_topic_count": 1,
+    "detailed_decision_count": 0,
+    "detailed_question_count": 0,
+    "detailed_risk_count": 0,
+    "detailed_task_count": 0,
+    "dropped_questions": [],
+    "unsupported_standard_items": 0
+  },
+  "_compaction": {
+    "applied": true,
+    "meeting_type": "external"
+  }
+}

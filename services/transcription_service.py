@@ -1,41 +1,86 @@
+import os
 from pathlib import Path
+
+from services.newton_cli import build_newton_command
+from services.process_runner import (
+    classify_auth_error,
+    decode_process_output,
+    run_process,
+)
+from services.runtime_config import get_runtime_config
+
+
+class TranscriptionError(RuntimeError):
+    def __init__(self, code="", safe_message="", stage=""):
+        self.code = code
+        self.safe_message = safe_message
+        self.stage = stage
+        super().__init__(safe_message)
 
 
 class TranscriptionClient:
-    def __init__(self, token=None, base_url=None, newton_path=None):
-        self.token = token
-        self.base_url = base_url
-        self.newton_path = newton_path
-        self.mock_mode = True
+    def __init__(self, token=None, cli_path=None, engine="v3", timeout_seconds=300):
+        cfg = get_runtime_config()
+        self.token = token or cfg.onebit_token
+        self.cli_path = cli_path or cfg.onebit_cli_path
+        self.engine = engine
+        self.timeout_seconds = timeout_seconds
+        self.provider = cfg.transcription_provider
+        self.mock_mode = (self.provider == "mock")
 
     def check_connection(self) -> bool:
-        return self.mock_mode
+        if self.provider == "mock":
+            return True
+        if self.provider == "disabled":
+            return False
+        # Don't call CLI during connection check — just check config
+        return bool(self.token and self.cli_path)
 
     def transcribe_video(self, video_path: Path, output_dir: Path) -> str:
-        name = video_path.stem
-        transcript = f"""[Mock transcript from video: {name}]
+        if self.provider == "mock":
+            return _mock_transcribe(video_path, output_dir)
+        if self.provider == "disabled":
+            raise TranscriptionError(code="TRANSCRIPTION_DISABLED", safe_message="Транскрибация отключена")
 
-[00:00] Ведущий: Добрый день, коллеги. Начинаем встречу по обсуждению текущего статуса проекта.
-[00:15] Участник 1: У нас есть несколько вопросов, требующих решения.
-[00:30] Ведущий: Давайте пройдём по повестке. Первый вопрос — статус разработки модуля интеграции.
-[01:00] Участник 2: Модуль готов на 80%, осталось тестирование API-контрактов.
-[01:30] Ведущий: Какие риски вы видите?
-[02:00] Участник 2: Основной риск — зависимость от внешнего сервиса, который может изменить API.
-[02:30] Ведущий: Предлагаю зафиксировать это как риск и запланировать альтернативное решение.
-[03:00] Участник 1: Согласен. Также нужно определить ответственного за тестирование.
-[03:30] Ведущий: Назначаем Иванова ответственным, срок — до 30 июля.
-[04:00] Участник 2: Принято. Следующий вопрос — бюджет на следующий этап.
-[04:30] Участник 1: Бюджет требует уточнения, точные цифры предоставлю завтра.
-[05:00] Ведущий: Хорошо, ждём информацию. Переходим к задачам.
-[05:30] Ведущий: Задача 1 — завершить тестирование модуля до 30.07.2026. Ответственный: Иванов.
-[06:00] Ведущий: Задача 2 — подготовить уточнённый бюджет. Ответственный: Петров, срок 28.07.2026.
-[06:30] Ведущий: Есть ли ещё вопросы?
-[07:00] Участник 1: Вопрос по срокам внедрения — реалистично ли уложиться до сентября?
-[07:30] Ведущий: Вопрос остаётся открытым, требуется оценка от команды разработки.
-[08:00] Ведущий: Хорошо, на этом завершаем. Спасибо всем.
-"""
+        if not video_path.exists():
+            raise TranscriptionError(code="TRANSCRIPTION_INPUT_NOT_FOUND",
+                safe_message=f"Файл не найден: {video_path}")
+        if not self.token:
+            raise TranscriptionError(code="TRANSCRIPTION_TOKEN_MISSING",
+                safe_message="Токен БИТ Ньютон не указан")
+
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        tpath = output_dir / f"{name}_transcript.txt"
-        tpath.write_text(transcript, encoding="utf-8")
-        return transcript
+        out_file = output_dir / f"{video_path.stem}_transcript.txt"
+
+        env = os.environ.copy()
+        env["NEWTON_TOKEN"] = self.token
+        env["PYTHONIOENCODING"] = "utf-8"
+        args = build_newton_command(self.cli_path, "transcribe", str(video_path),
+                                    "--engine", self.engine, "--output", str(out_file))
+
+        r = run_process(args, env=env, timeout_seconds=self.timeout_seconds,
+                       secret_values=[self.token] if self.token else None)
+
+        if r.returncode != 0:
+            auth_code, auth_msg = classify_auth_error(r.stderr, r.returncode)
+            raise TranscriptionError(code=auth_code or "TRANSCRIPTION_FAILED",
+                safe_message=auth_msg or f"CLI exit {r.returncode}: {r.stderr[:300]}",
+                stage="cli_execution")
+
+        if not out_file.exists() or out_file.stat().st_size == 0:
+            raise TranscriptionError(code="TRANSCRIPTION_OUTPUT_EMPTY",
+                safe_message="Транскрибация не создала выходной файл")
+
+        raw = out_file.read_bytes()
+        text, encoding, _score = decode_process_output(raw, preferred_encoding="auto")
+        return text
+
+
+def _mock_transcribe(video_path: Path, output_dir: Path) -> str:
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    name = video_path.stem
+    transcript = f"[Mock transcript: {name}]\nВедущий: Добрый день.\nУчастник 1: Обсуждаем проект.\n"
+    (output_dir / f"{name}_transcript.txt").write_text(transcript, encoding="utf-8")
+    return transcript

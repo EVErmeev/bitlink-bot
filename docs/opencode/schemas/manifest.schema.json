@@ -65,7 +65,9 @@
         "changes_required",
         "in_progress",
         "awaiting_independent_validation",
-        "accepted"
+        "accepted",
+        "conditionally_accepted",
+        "rejected"
       ]
     },
     "validation_state": {
@@ -75,7 +77,10 @@
         "awaiting_fixes",
         "implementing_fixes",
         "awaiting_review",
-        "accepted"
+        "validation_in_progress",
+        "validation_failed",
+        "accepted",
+        "conditionally_accepted"
       ]
     },
     "required_checks": {
@@ -84,6 +89,71 @@
       "items": {
         "type": "string"
       }
+    },
+    "issues": {
+      "type": "array",
+      "description": "Список замечаний с текущим статусом.",
+      "items": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Идентификатор замечания (BB-CRIT-XXX или BB-MAJ-XXX)."
+          },
+          "status": {
+            "type": "string",
+            "description": "Статус исправления.",
+            "enum": ["OPEN", "IN_PROGRESS", "FIXED", "PARTIALLY_FIXED", "NOT_FIXED", "NOT_VERIFIABLE", "REGRESSION"]
+          },
+          "fix_commit": {
+            "type": ["string", "null"],
+            "description": "SHA коммита с исправлением."
+          },
+          "changed_files": {
+            "type": "array",
+            "description": "Файлы, изменённые для исправления.",
+            "items": {"type": "string"}
+          },
+          "tests": {
+            "type": "array",
+            "description": "Тесты, добавленные или изменённые.",
+            "items": {"type": "string"}
+          },
+          "executor_comment": {
+            "type": "string",
+            "description": "Комментарий исполнителя."
+          }
+        }
+      }
+    },
+    "test_results": {
+      "type": "object",
+      "description": "Результаты автоматических проверок.",
+      "properties": {
+        "compileall": {"type": ["object", "string", "null"]},
+        "pytest": {"type": ["object", "string", "null"]},
+        "ruff": {"type": ["object", "string", "null"]},
+        "mypy": {"type": ["object", "string", "null"]}
+      }
+    },
+    "changed_files": {
+      "type": "array",
+      "description": "Все изменённые файлы в текущем цикле.",
+      "items": {"type": "string"}
+    },
+    "remaining_blockers": {
+      "type": "array",
+      "description": "Оставшиеся блокирующие замечания.",
+      "items": {"type": "string"}
+    },
+    "next_action": {
+      "type": "string",
+      "description": "Следующее действие."
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "Дата и время последнего обновления (ISO 8601)."
     }
   }
 }

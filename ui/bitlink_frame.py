@@ -1,7 +1,8 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
-from services.bitlink_service import BitlinkClient
+from tkinter import messagebox, ttk
+
 from models.batch import BatchItem
+from services.bitlink_service import BitlinkClient
 
 
 class BitlinkFrame(ttk.Frame):

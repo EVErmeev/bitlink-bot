@@ -1,0 +1,53 @@
+{
+  "topic_cells": [
+    {
+      "index": 0,
+      "paragraphs": 1,
+      "bullets": 3,
+      "chars": 277
+    },
+    {
+      "index": 1,
+      "paragraphs": 1,
+      "bullets": 3,
+      "chars": 215
+    },
+    {
+      "index": 2,
+      "paragraphs": 1,
+      "bullets": 3,
+      "chars": 254
+    },
+    {
+      "index": 3,
+      "paragraphs": 1,
+      "bullets": 3,
+      "chars": 230
+    },
+    {
+      "index": 4,
+      "paragraphs": 1,
+      "bullets": 3,
+      "chars": 230
+    },
+    {
+      "index": 5,
+      "paragraphs": 1,
+      "bullets": 3,
+      "chars": 262
+    },
+    {
+      "index": 6,
+      "paragraphs": 1,
+      "bullets": 3,
+      "chars": 280
+    },
+    {
+      "index": 7,
+      "paragraphs": 1,
+      "bullets": 1,
+      "chars": 261
+    }
+  ],
+  "long_unbroken_cells": []
+}

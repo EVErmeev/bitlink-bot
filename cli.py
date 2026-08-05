@@ -5,10 +5,9 @@ from pathlib import Path
 # Add parent to path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import settings
 from models.batch import BatchItem
 from services.processing_service import ProcessingService
-from services.runtime_estimator import RuntimeEstimator
-import settings
 
 
 def main():
@@ -24,6 +23,7 @@ def main():
     parser.add_argument("--parent-page-id", type=str, default=None)
     parser.add_argument("--dry-run", action="store_true", help="Генерация без публикации")
     parser.add_argument("--no-telegram", action="store_true", help="Пропустить Telegram-уведомление")
+    parser.add_argument("--resume", action="store_true", help="Восстановить очередь из batch_state.json")
 
     args = parser.parse_args()
 
@@ -39,6 +39,8 @@ def main():
         process_file(args.text, "local_transcript", args)
     elif args.local:
         process_file(args.local, "local_video", args)
+    elif args.resume:
+        resume_queue(args)
     else:
         parser.print_help()
         print("\nУкажите --text или --local для обработки файла")
@@ -60,6 +62,7 @@ def process_file(filepath: str, source_type: str, args):
         protocol_mode=args.protocol_mode,
         parent_page_id=args.parent_page_id,
         send_telegram=not args.no_telegram,
+        dry_run=args.dry_run,
     )
 
     if source_type == "local_transcript":
@@ -85,7 +88,7 @@ def process_file(filepath: str, source_type: str, args):
     result = service.process_item(item)
 
     if result["success"]:
-        print(f"\nГотово! Протокол создан.")
+        print("\nГотово! Протокол создан.")
         if result.get("url"):
             print(f"URL: {result['url']}")
     else:
@@ -114,10 +117,9 @@ def run_setup():
     tg_token = input("\nTelegram Bot Token (опционально): ").strip()
     tg_chat = input("Telegram Chat ID (опционально): ").strip()
 
-    lines = []
     if env_path.exists():
-        with open(env_path, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+        with open(env_path, encoding="utf-8") as f:
+            _ = f.readlines()
 
     env_vars = {
         "BITLINK_BASE_URL": bitlink_base,
@@ -146,7 +148,6 @@ def run_watch():
     print("Нажмите Ctrl+C для выхода")
     # Simple watch implementation
     import time
-    import os
     watch_dir = Path.cwd()
     known_files = set()
 
@@ -165,6 +166,37 @@ def run_watch():
             time.sleep(5)
     except KeyboardInterrupt:
         print("\nНаблюдение остановлено.")
+
+
+def resume_queue(args):
+    from services.batch_service import BatchService
+    from services.processing_service import ProcessingService
+    from settings import DATA_DIR
+
+    state_path = DATA_DIR / "batch_state.json"
+    if not state_path.exists():
+        print("Файл batch_state.json не найден. Нечего восстанавливать.")
+        sys.exit(1)
+
+    service = BatchService()
+    batch = service.load_state(state_path)
+    if not batch or not batch.items:
+        print("Очередь пуста.")
+        return
+
+    pending = [i for i in batch.items if i.status not in ("completed", "skipped")]
+    print(f"Восстановлено: {len(batch.items)} элементов, {len(pending)} ожидают обработки.")
+
+    proc = ProcessingService(progress_callback=lambda stage, pct, item:
+                             print(f"  [{pct:.0f}%] {stage} — {item.display_name}"))
+    for item in pending:
+        print(f"\nОбработка: {item.display_name}")
+        result = proc.process_item(item)
+        if not result["success"]:
+            print(f"  Ошибка: {result.get('error', 'неизвестно')}")
+
+    service.save_state(state_path)
+    print("\nВосстановление завершено.")
 
 
 if __name__ == "__main__":

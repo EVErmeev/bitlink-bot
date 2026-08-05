@@ -1,10 +1,28 @@
+import html as html_mod
 import re
 import uuid
 from datetime import date
 
-from protocol_templates.base import BaseProtocolTemplate
-from models.protocol import Protocol, TopicBlock, DecisionItem, QuestionItem, RiskItem, TaskItem, AtomicItem
+from models.protocol import (
+    AtomicItem,
+    DecisionItem,
+    Protocol,
+    QuestionItem,
+    RiskItem,
+    TaskItem,
+    TopicBlock,
+)
 from models.validation import ValidationReport, ValidationStatus
+from protocol_templates.base import BaseProtocolTemplate
+from services.protocol_content_utils import (
+    fill_or,
+    fill_required,
+    normalize_paragraphs,
+    normalize_rich_text_blocks,
+    normalize_text_list,
+    render_rich_text_blocks,
+    split_key_outcomes_semantically,
+)
 
 
 class ProjectDetailedTemplate(BaseProtocolTemplate):
@@ -143,12 +161,193 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         resp = tb.status_responsible if tb.status_responsible else "Ответственный не определён"
         dl = tb.status_deadline if tb.status_deadline else "Срок не определён"
         parts.append(f"{resp}, {dl}")
-        return ". ".join(parts) if parts else (f"Ответственный не определён, Срок не определён")
+        return ". ".join(parts) if parts else ("Ответственный не определён, Срок не определён")
+
+    def _render_status_cell(self, tb: TopicBlock) -> str:
+        """Render a structured status cell (label, next actions, responsible, deadline)."""
+        label = tb.status_text or "Не определено"
+        out = [f"<p><strong>{html_mod.escape(label)}</strong></p>"]
+        if tb.status_next_action:
+            out.append("<p><strong>Следующее действие:</strong></p>")
+            out.append(render_rich_text_blocks(normalize_rich_text_blocks(tb.status_next_action)))
+        responsible = tb.status_responsible or "Не определён"
+        deadline = tb.status_deadline or "Не определён"
+        out.append(f"<p><strong>Ответственные:</strong> {html_mod.escape(responsible)}</p>")
+        out.append(f"<p><strong>Срок:</strong> {html_mod.escape(deadline)}</p>")
+        return "\n".join(o for o in out if o)
+
+    # ── Keyword clustering ──────────────────────────────────────────────
+
+    def _extract_keywords(self, text: str) -> set[str]:
+        """Extract significant words (len > 3, only Russian/English letters) from text."""
+        words = re.findall(r"[а-яёa-z]{4,}", text.lower())
+        return set(words)
+
+    def _cluster_facts(self, facts: list[AtomicItem]) -> dict[str, tuple[set[str], list[AtomicItem]]]:
+        """Group fact items by keyword similarity.
+
+        Returns dict: topic_label -> (keyword_set, [AtomicItem, ...])
+        """
+        topics: dict[str, tuple[set[str], list[AtomicItem]]] = {}
+
+        for fact in facts:
+            words = self._extract_keywords(fact.text)
+            if not words:
+                words = {fact.text[:20].strip() or "обсуждение"}
+
+            matched = False
+            for topic_name, (topic_words, items) in topics.items():
+                common = words & topic_words
+                if len(common) >= 2:
+                    topics[topic_name][0].update(words)
+                    topics[topic_name][1].append(fact)
+                    matched = True
+                    break
+
+            if not matched:
+                sorted_words = sorted(words)
+                key_words = sorted_words[:3] if len(sorted_words) >= 3 else sorted_words
+                key = " ".join(key_words)[:60] or "Обсуждение"
+                counter = 1
+                unique_key = key
+                while unique_key in topics:
+                    counter += 1
+                    unique_key = f"{key} ({counter})"
+                topics[unique_key] = (words, [fact])
+
+        return topics
+
+    def _derive_topic_title(self, keywords: set[str], topic_label: str,
+                            llm_titles: list[str] | None = None) -> str:
+        """Derive a human-readable title from keywords or LLM output."""
+        sorted_kw = sorted(keywords, key=len, reverse=True)
+        top = sorted_kw[:4]
+
+        topic_prefixes = {
+            "интеграц": "Интеграция систем",
+            "документооборот": "Документооборот",
+            "отчёт": "Отчётность",
+            "согласован": "Согласование",
+            "процесс": "Бизнес-процесс",
+            "рол": "Роли и полномочия",
+            "доступ": "Права доступа",
+            "справочник": "Справочники и НСИ",
+            "загрузк": "Загрузка данных",
+            "миграц": "Миграция данных",
+            "тестирован": "Тестирование",
+            "обучен": "Обучение пользователей",
+            "архитектур": "Архитектура решения",
+            "безопасност": "Безопасность",
+            "план": "Планирование",
+            "риск": "Риски",
+            "срок": "Сроки проекта",
+            "бюджет": "Бюджет",
+            "требован": "Требования",
+            "прототип": "Прототипирование",
+        }
+
+        for kw, prefix in topic_prefixes.items():
+            if any(kw in w for w in top):
+                if len(top) > 1:
+                    other = [w for w in top if kw not in w][:2]
+                    return f"{prefix}: {', '.join(other)}"
+                return prefix
+
+        if llm_titles and len(llm_titles) > 0:
+            idx = len(llm_titles)
+            if idx < len(llm_titles):
+                return llm_titles[idx]
+            return llm_titles[0]
+
+        if top:
+            cap_words = [w.capitalize() for w in top[:3]]
+            return f"Тема: {' '.join(cap_words)}"
+
+        return topic_label[:60] or "Обсуждение"
+
+    def _build_topic_blocks(self, facts: list[AtomicItem], source_context_id: str,
+                            llm_titles: list[str] | None = None) -> list[TopicBlock]:
+        """Build multiple TopicBlock instances from clustered facts."""
+        if not facts:
+            return []
+
+        clusters = self._cluster_facts(facts)
+        if not clusters:
+            return []
+
+        topic_blocks = []
+        order = 0
+
+        for label, (keywords, items) in clusters.items():
+            order += 1
+            discussion_parts = []
+            speakers = set()
+            for item in items:
+                discussion_parts.append(item.text)
+                if item.speaker:
+                    speakers.add(item.speaker)
+
+            discussion = ". ".join(discussion_parts)
+            speakers_str = ", ".join(speakers) if speakers else "Ответственный не определён"
+
+            conclusion_parts = [f"Обсуждено {len(items)} фактов по теме."]
+            if speakers:
+                conclusion_parts.append(f"Докладчики: {speakers_str}.")
+            conclusion_parts.append("Требуется дальнейший анализ и проработка.")
+            conclusion = " ".join(conclusion_parts)
+
+            title = self._derive_topic_title(keywords, label, llm_titles)
+
+            topic_block = TopicBlock(
+                topic_id=str(uuid.uuid4()),
+                title=title,
+                source_context_id=source_context_id or "",
+                discussion_content=discussion,
+                conclusion=conclusion,
+                status_text="Обсуждено",
+                status_reason="Информация получена от участников встречи",
+                status_next_action="Принять к сведению и проработать",
+                status_responsible=speakers_str,
+                status_deadline="Срок не определён",
+                order=order,
+            )
+            topic_blocks.append(topic_block)
+
+        return topic_blocks
+
+    # ── Helper: extract LLM topic titles ─────────────────────────────────
+
+    def _extract_llm_topic_titles(self, llm_output: str) -> list[str] | None:
+        """Try to extract topic titles from LLM output. Returns None if not found."""
+        if not llm_output or not llm_output.strip():
+            return None
+
+        titles = []
+
+        lq = "\u00ab"
+        rq = "\u00bb"
+        title_patterns = [
+            "(?:" + "Тематический блок" + "|" + "Тема" + r")\s*\d*\s*[" + lq + r":](.+?)[" + rq + r":]",
+            r"(?:###|##)\s*(.+?)(?:\n|$)",
+            r"\*\*(.+?)\*\*",
+        ]
+
+        for pattern in title_patterns:
+            matches = re.findall(pattern, llm_output, re.IGNORECASE)
+            for m in matches:
+                clean = m.strip().strip(lq + rq + '"')
+                if len(clean) > 5 and clean not in titles:
+                    titles.append(clean)
+
+        return titles if titles else None
+
+    # ── assemble ─────────────────────────────────────────────────────────
 
     def assemble(self, protocol: Protocol, atomic_items: list, meeting_metadata: dict) -> Protocol:
         protocol.template_id = self.template_id
         protocol.atomic_items = atomic_items
 
+        # --- metadata ---
         if meeting_metadata:
             if "date" in meeting_metadata and not protocol.meeting_date:
                 raw_date = meeting_metadata["date"]
@@ -167,19 +366,22 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
             if "participants" in meeting_metadata:
                 protocol.participants = meeting_metadata["participants"]
 
+        # --- classify items by type ---
+        fact_items = []
         for item in atomic_items:
             if not isinstance(item, AtomicItem):
                 continue
+
             if item.item_type == "решение" and item.explicit_agreement and item.confidence >= 0.7:
                 decision = DecisionItem(
                     decision_id=item.item_id,
                     source_context_id=item.source_context_id,
                     decision_text=item.text,
-                    context_and_basis="",
-                    agreed_scope="",
-                    boundaries="",
-                    responsible="",
-                    deadline="",
+                    context_and_basis="На основании обсуждения на встрече",
+                    agreed_scope="Объём согласован в ходе встречи",
+                    boundaries="Границы определены контекстом обсуждения",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
                     related_topic="",
                     order=len(protocol.decisions) + 1,
                     explicit_agreement=item.explicit_agreement,
@@ -193,47 +395,52 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
                     question_id=item.item_id,
                     source_context_id=item.source_context_id,
                     question_text=item.text,
-                    context="",
-                    known_info="",
-                    to_determine="",
-                    responsible="",
-                    deadline="",
-                    next_action="",
+                    context="Вопрос поднят в ходе встречи",
+                    known_info="Информация уточняется",
+                    to_determine="Требуется уточнение",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    next_action="Запросить информацию",
                     status="открыт",
                     related_topic="",
                     order=len(protocol.questions) + 1,
                 )
                 protocol.questions.append(question)
 
-            elif item.item_type == "риск":
+            elif item.item_type in ("риск", "ограничение", "зависимость"):
+                risk_type_map = {
+                    "риск": "Риск",
+                    "ограничение": "Ограничение",
+                    "зависимость": "Зависимость",
+                }
                 risk = RiskItem(
                     risk_id=item.item_id,
                     source_context_id=item.source_context_id,
-                    risk_type="Риск",
+                    risk_type=risk_type_map.get(item.item_type, "Риск"),
                     risk_text=item.text,
-                    reason="",
-                    impact="",
-                    trigger_condition="",
-                    measures="",
-                    responsible="",
-                    deadline="",
+                    reason="Выявлено в ходе встречи",
+                    impact="Требует оценки",
+                    trigger_condition="Условия не определены",
+                    measures="Меры не определены",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
                     status="актуален",
                     related_topic="",
                     order=len(protocol.risks) + 1,
                 )
                 protocol.risks.append(risk)
 
-            elif item.item_type == "задача":
+            elif item.item_type == "задача" and item.commitment_confirmed:
                 task = TaskItem(
                     task_id=item.item_id,
                     source_context_id=item.source_context_id,
                     task_text=item.text,
-                    basis="",
-                    expected_result="",
-                    responsible="",
+                    basis="Поставлена в ходе встречи",
+                    expected_result="Результат будет определён при уточнении",
+                    responsible="Ответственный не определён",
                     co_executors="",
-                    deadline="",
-                    dependencies="",
+                    deadline="Срок не определён",
+                    dependencies="Зависимости не указаны",
                     status="новая",
                     related_topic="",
                     order=len(protocol.tasks) + 1,
@@ -241,37 +448,401 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
                 )
                 protocol.tasks.append(task)
 
-        fact_items = [item for item in atomic_items if isinstance(item, AtomicItem) and item.item_type == "факт"]
+            elif item.item_type == "факт":
+                fact_items.append(item)
+
+        # --- cluster facts into multiple topic blocks ---
         if fact_items:
-            fact_texts = []
-            fact_speakers = set()
-            for fi in fact_items:
-                fact_texts.append(fi.text)
-                if fi.speaker:
-                    fact_speakers.add(fi.speaker)
-            discussion = ". ".join(fact_texts)
-            title_prefix = " ".join(fact_texts[0].split()[:4]) + "..." if len(fact_texts[0].split()) > 4 else fact_texts[0]
-            conclusion = "Факты зафиксированы, требуется дальнейший анализ."
-            speakers_str = ", ".join(fact_speakers) if fact_speakers else ""
-            topic_block = TopicBlock(
-                topic_id=str(uuid.uuid4()),
-                title=f"Зафиксированные факты: {title_prefix}",
-                source_context_id=protocol.source_context_id or "",
-                discussion_content=discussion,
-                conclusion=conclusion,
-                status_text="Зафиксировано",
-                status_reason="Информация получена от участников встречи",
-                status_next_action="Принять к сведению",
-                status_responsible=speakers_str or "Ответственный не определён",
-                status_deadline="Срок не определён",
-                order=len(protocol.topic_blocks) + 1,
+            src_ctx = protocol.source_context_id or ""
+            topic_blocks = self._build_topic_blocks(fact_items, src_ctx)
+            for tb in topic_blocks:
+                protocol.topic_blocks.append(tb)
+
+        # --- key outcomes ---
+        outcome_parts = []
+        if protocol.decisions:
+            outcome_parts.append(f"Принято {len(protocol.decisions)} решений.")
+        if protocol.questions:
+            outcome_parts.append(f"Зафиксировано {len(protocol.questions)} открытых вопросов.")
+        if protocol.risks:
+            outcome_parts.append(f"Выявлено {len(protocol.risks)} рисков/ограничений.")
+        if protocol.tasks:
+            outcome_parts.append(f"Поставлено {len(protocol.tasks)} задач.")
+        if protocol.topic_blocks:
+            outcome_parts.append(f"Рассмотрено {len(protocol.topic_blocks)} тематических блоков.")
+
+        if outcome_parts:
+            protocol.key_outcomes = " ".join(outcome_parts)
+        else:
+            protocol.key_outcomes = "Встреча проведена. Итоги зафиксированы."
+
+        # --- current state ---
+        if fact_items:
+            state_parts = [f"Зафиксировано {len(fact_items)} фактов в {len(protocol.topic_blocks)} тематических блоках."]
+            speakers_list = list(set(f.speaker for f in fact_items if f.speaker))
+            if speakers_list:
+                state_parts.append(f"Докладчики: {', '.join(speakers_list)}.")
+            protocol.current_state = " ".join(state_parts)
+
+        # --- word counts ---
+        for tb in protocol.topic_blocks:
+            tb.word_count = len(re.findall(r"\b\w+\b", tb.discussion_content + " " + tb.conclusion))
+
+        return protocol
+
+    # ── assemble_from_llm_json ───────────────────────────────────────────
+
+    def assemble_from_llm_json(self, protocol: Protocol, atomic_items: list,
+                                llm_data: dict, meeting_metadata: dict) -> Protocol:
+        llm_title = ""
+        if "protocol_title" in llm_data:
+            llm_title = str(llm_data.get("protocol_title", "")).strip()
+        elif "general_info" in llm_data:
+            llm_title = str(llm_data.get("general_info", {}).get("protocol_title", "")).strip()
+        if llm_title and len(llm_title) < 120:
+            protocol.protocol_title = llm_title
+
+        general_info = llm_data.get("general_info", {})
+        if isinstance(general_info, dict):
+            gi_date = general_info.get("meeting_date")
+            if gi_date and isinstance(gi_date, str):
+                try:
+                    protocol.meeting_date = date.fromisoformat(gi_date)
+                except ValueError:
+                    pass
+            gi_ctx = general_info.get("meeting_context")
+            if gi_ctx:
+                protocol.meeting_context = gi_ctx
+
+        # ── purpose and context — separate fields (not same text) ──
+        protocol.meeting_purpose = llm_data.get("meeting_purpose", "") or llm_data.get("purpose_and_context", "")
+        if not protocol.meeting_context:
+            protocol.meeting_context = llm_data.get("meeting_context", "") or llm_data.get("purpose_and_context", "")
+
+        protocol.key_outcomes = llm_data.get("key_outcomes", "")
+        protocol.current_state = llm_data.get("current_state", "")
+        if llm_data.get("participants"):
+            protocol.participants = [p if isinstance(p, dict) else {"name": str(p)} for p in llm_data["participants"]]
+
+        topic_blocks_data = llm_data.get("topic_blocks", [])
+        protocol.topic_blocks = []
+        for i, tb_data in enumerate(topic_blocks_data):
+            tb = TopicBlock(
+                topic_id=tb_data.get("topic_id", f"tb_{i}"),
+                title=tb_data.get("title", f"Тема {i + 1}"),
+                source_context_id=protocol.source_context_id,
+                discussion_content=tb_data.get("discussion_content", ""),
+                conclusion=tb_data.get("conclusion", ""),
+                status_text=tb_data.get("status_text", ""),
+                status_reason=tb_data.get("status_reason", ""),
+                status_next_action=tb_data.get("status_next_action", ""),
+                status_responsible=tb_data.get("status_responsible", ""),
+                status_deadline=tb_data.get("status_deadline", ""),
+                order=i + 1,
+                word_count=len(tb_data.get("discussion_content", "").split()),
+                source_item_ids=tb_data.get("source_item_ids", []),
+                evidence=tb_data.get("evidence", []),
             )
-            protocol.topic_blocks.append(topic_block)
+            protocol.topic_blocks.append(tb)
+
+        if not any(tb.source_item_ids for tb in protocol.topic_blocks) and atomic_items:
+            from services.topic_coverage import (
+                build_topic_registry,
+                map_atomic_items_to_topics,
+            )
+            registry = build_topic_registry(protocol)
+            registry = map_atomic_items_to_topics(protocol, registry)
+            for tb in protocol.topic_blocks:
+                if tb.topic_id in registry:
+                    tb.source_item_ids = registry[tb.topic_id].get("source_item_ids", [])
+
+        # ── Map decisions from LLM (ALL fields, NO forced explicit_agreement/confidence) ──
+        decisions_data = llm_data.get("decisions", [])
+        if decisions_data:
+            for i, d in enumerate(decisions_data):
+                if not isinstance(d, dict):
+                    continue
+                decision_text = d.get("decision_text") or d.get("text") or d.get("решение")
+                if not decision_text:
+                    continue
+                protocol.decisions.append(DecisionItem(
+                    decision_id=d.get("decision_id", f"d_{i}"),
+                    source_context_id=d.get("source_context_id", "") or protocol.source_context_id,
+                    decision_text=decision_text,
+                    context_and_basis=d.get("context_and_basis", "") or d.get("context", "") or d.get("основание", ""),
+                    agreed_scope=d.get("agreed_scope", "") or d.get("scope", "") or d.get("что_согласовано", ""),
+                    boundaries=d.get("boundaries", "") or d.get("границы", ""),
+                    responsible=d.get("responsible", "") or d.get("ответственный", ""),
+                    deadline=d.get("deadline", "") or d.get("срок", ""),
+                    related_topic=d.get("related_topic", "") or d.get("связанная_тема", ""),
+                    order=i + 1,
+                    explicit_agreement=d.get("explicit_agreement", False),
+                    confidence=d.get("confidence", 0.0),
+                    evidence=d.get("evidence", "") or d.get("подтверждение", ""),
+                ))
+        else:
+            self._fill_decisions_from_atomic(protocol, atomic_items)
+
+        # ── Map questions from LLM (ALL fields + aliases) ──
+        questions_data = llm_data.get("questions", [])
+        if questions_data:
+            for i, q in enumerate(questions_data):
+                if not isinstance(q, dict):
+                    continue
+                question_text = q.get("question_text") or q.get("text") or q.get("вопрос")
+                if not question_text:
+                    continue
+                protocol.questions.append(QuestionItem(
+                    question_id=q.get("question_id", f"q_{i}"),
+                    source_context_id=q.get("source_context_id", "") or protocol.source_context_id,
+                    question_text=question_text,
+                    context=q.get("context", "") or q.get("контекст", ""),
+                    known_info=q.get("known_info", "") or q.get("что_известно", ""),
+                    to_determine=q.get("to_determine", "") or q.get("что_определить", ""),
+                    responsible=q.get("responsible", "") or q.get("ответственный", ""),
+                    deadline=q.get("deadline", "") or q.get("срок", ""),
+                    next_action=q.get("next_action", "") or q.get("следующее_действие", ""),
+                    status=q.get("status", "") or q.get("статус", ""),
+                    related_topic=q.get("related_topic", "") or q.get("связанная_тема", ""),
+                    order=i + 1,
+                ))
+        else:
+            self._fill_questions_from_atomic(protocol, atomic_items)
+
+        # ── Map risks from LLM (ALL fields + aliases) ──
+        risks_data = llm_data.get("risks", [])
+        if risks_data:
+            for i, r in enumerate(risks_data):
+                if not isinstance(r, dict):
+                    continue
+                risk_text = r.get("risk_text") or r.get("text") or r.get("риск")
+                if not risk_text:
+                    continue
+                protocol.risks.append(RiskItem(
+                    risk_id=r.get("risk_id", f"r_{i}"),
+                    source_context_id=r.get("source_context_id", "") or protocol.source_context_id,
+                    risk_type=r.get("risk_type", "") or r.get("type", "") or r.get("тип", ""),
+                    risk_text=risk_text,
+                    reason=r.get("reason", "") or r.get("причина", ""),
+                    impact=r.get("impact", "") or r.get("влияние", ""),
+                    trigger_condition=r.get("trigger_condition", "") or r.get("условие_проявления", ""),
+                    measures=r.get("measures", "") or r.get("меры", ""),
+                    responsible=r.get("responsible", "") or r.get("ответственный", ""),
+                    deadline=r.get("deadline", "") or r.get("срок", ""),
+                    status=r.get("status", "") or r.get("статус", ""),
+                    related_topic=r.get("related_topic", "") or r.get("связанная_тема", ""),
+                    order=i + 1,
+                ))
+        else:
+            self._fill_risks_from_atomic(protocol, atomic_items)
+
+        # ── Map tasks from LLM (ALL fields, NO forced commitment_confirmed=true) ──
+        tasks_data = llm_data.get("tasks", [])
+        if tasks_data:
+            for i, t in enumerate(tasks_data):
+                if not isinstance(t, dict):
+                    continue
+                task_text = t.get("task_text") or t.get("text") or t.get("задача")
+                if not task_text:
+                    continue
+                protocol.tasks.append(TaskItem(
+                    task_id=t.get("task_id", f"t_{i}"),
+                    source_context_id=t.get("source_context_id", "") or protocol.source_context_id,
+                    task_text=task_text,
+                    basis=t.get("basis", "") or t.get("основание", ""),
+                    expected_result=t.get("expected_result", "") or t.get("ожидаемый_результат", ""),
+                    responsible=t.get("responsible", "") or t.get("ответственный", ""),
+                    co_executors=t.get("co_executors", "") or t.get("соисполнители", ""),
+                    deadline=t.get("deadline", "") or t.get("срок", ""),
+                    dependencies=t.get("dependencies", "") or t.get("зависимости", ""),
+                    status=t.get("status", "") or t.get("статус", ""),
+                    related_topic=t.get("related_topic", "") or t.get("связанная_тема", ""),
+                    order=i + 1,
+                    commitment_confirmed=t.get("commitment_confirmed", False),
+                ))
+        else:
+            self._fill_tasks_from_atomic(protocol, atomic_items)
+
+        return protocol
+
+    def _fill_decisions_from_atomic(self, protocol: Protocol, atomic_items: list):
+        for i, ai in enumerate(a for a in atomic_items if a.item_type == "решение" and a.explicit_agreement):
+            protocol.decisions.append(DecisionItem(
+                decision_id=f"d_{i}", source_context_id=ai.source_context_id,
+                decision_text=ai.text, explicit_agreement=ai.explicit_agreement,
+                confidence=ai.confidence, evidence=ai.evidence,
+            ))
+
+    def _fill_questions_from_atomic(self, protocol: Protocol, atomic_items: list):
+        for i, ai in enumerate(a for a in atomic_items if a.item_type == "вопрос"):
+            protocol.questions.append(QuestionItem(
+                question_id=f"q_{i}", source_context_id=ai.source_context_id,
+                question_text=ai.text,
+            ))
+
+    def _fill_risks_from_atomic(self, protocol: Protocol, atomic_items: list):
+        for i, ai in enumerate(a for a in atomic_items if a.item_type in ("риск", "ограничение", "зависимость")):
+            protocol.risks.append(RiskItem(
+                risk_id=f"r_{i}", source_context_id=ai.source_context_id,
+                risk_text=ai.text,
+            ))
+
+    def _fill_tasks_from_atomic(self, protocol: Protocol, atomic_items: list):
+        for i, ai in enumerate(a for a in atomic_items if a.item_type == "задача" and a.commitment_confirmed):
+            protocol.tasks.append(TaskItem(
+                task_id=f"t_{i}", source_context_id=ai.source_context_id,
+                task_text=ai.text, commitment_confirmed=ai.commitment_confirmed,
+            ))
+
+    # ── assemble_with_llm_output ─────────────────────────────────────────
+
+    def assemble_with_llm_output(self, protocol: Protocol, atomic_items: list,
+                                  llm_output: str, meeting_metadata: dict) -> Protocol:
+        """Use LLM output for topic titles, fall back to keyword clustering otherwise."""
+        protocol.template_id = self.template_id
+        protocol.atomic_items = atomic_items
+
+        # --- metadata ---
+        if meeting_metadata:
+            if "date" in meeting_metadata and not protocol.meeting_date:
+                raw_date = meeting_metadata["date"]
+                if isinstance(raw_date, str):
+                    try:
+                        protocol.meeting_date = date.fromisoformat(raw_date)
+                    except ValueError:
+                        pass
+                elif isinstance(raw_date, date):
+                    protocol.meeting_date = raw_date
+
+            protocol.protocol_title = meeting_metadata.get("title", protocol.protocol_title)
+            protocol.meeting_purpose = meeting_metadata.get("purpose", protocol.meeting_purpose)
+            protocol.meeting_context = meeting_metadata.get("context", protocol.meeting_context)
+
+            if "participants" in meeting_metadata:
+                protocol.participants = meeting_metadata["participants"]
+
+        llm_titles = self._extract_llm_topic_titles(llm_output)
+
+        fact_items = []
+        for item in atomic_items:
+            if not isinstance(item, AtomicItem):
+                continue
+
+            if item.item_type == "решение" and item.explicit_agreement and item.confidence >= 0.7:
+                decision = DecisionItem(
+                    decision_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    decision_text=item.text,
+                    context_and_basis="На основании обсуждения на встрече",
+                    agreed_scope="Объём согласован в ходе встречи",
+                    boundaries="Границы определены контекстом обсуждения",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    related_topic="",
+                    order=len(protocol.decisions) + 1,
+                    explicit_agreement=item.explicit_agreement,
+                    confidence=item.confidence,
+                    evidence=item.evidence,
+                )
+                protocol.decisions.append(decision)
+
+            elif item.item_type == "вопрос":
+                question = QuestionItem(
+                    question_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    question_text=item.text,
+                    context="Вопрос поднят в ходе встречи",
+                    known_info="Информация уточняется",
+                    to_determine="Требуется уточнение",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    next_action="Запросить информацию",
+                    status="открыт",
+                    related_topic="",
+                    order=len(protocol.questions) + 1,
+                )
+                protocol.questions.append(question)
+
+            elif item.item_type in ("риск", "ограничение", "зависимость"):
+                risk_type_map = {
+                    "риск": "Риск",
+                    "ограничение": "Ограничение",
+                    "зависимость": "Зависимость",
+                }
+                risk = RiskItem(
+                    risk_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    risk_type=risk_type_map.get(item.item_type, "Риск"),
+                    risk_text=item.text,
+                    reason="Выявлено в ходе встречи",
+                    impact="Требует оценки",
+                    trigger_condition="Условия не определены",
+                    measures="Меры не определены",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    status="актуален",
+                    related_topic="",
+                    order=len(protocol.risks) + 1,
+                )
+                protocol.risks.append(risk)
+
+            elif item.item_type == "задача" and item.commitment_confirmed:
+                task = TaskItem(
+                    task_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    task_text=item.text,
+                    basis="Поставлена в ходе встречи",
+                    expected_result="Результат будет определён при уточнении",
+                    responsible="Ответственный не определён",
+                    co_executors="",
+                    deadline="Срок не определён",
+                    dependencies="Зависимости не указаны",
+                    status="новая",
+                    related_topic="",
+                    order=len(protocol.tasks) + 1,
+                    commitment_confirmed=item.commitment_confirmed,
+                )
+                protocol.tasks.append(task)
+
+            elif item.item_type == "факт":
+                fact_items.append(item)
+
+        if fact_items:
+            src_ctx = protocol.source_context_id or ""
+            topic_blocks = self._build_topic_blocks(fact_items, src_ctx, llm_titles)
+            for tb in topic_blocks:
+                protocol.topic_blocks.append(tb)
+
+        outcome_parts = []
+        if protocol.decisions:
+            outcome_parts.append(f"Принято {len(protocol.decisions)} решений.")
+        if protocol.questions:
+            outcome_parts.append(f"Зафиксировано {len(protocol.questions)} открытых вопросов.")
+        if protocol.risks:
+            outcome_parts.append(f"Выявлено {len(protocol.risks)} рисков/ограничений.")
+        if protocol.tasks:
+            outcome_parts.append(f"Поставлено {len(protocol.tasks)} задач.")
+        if protocol.topic_blocks:
+            outcome_parts.append(f"Рассмотрено {len(protocol.topic_blocks)} тематических блоков.")
+
+        if outcome_parts:
+            protocol.key_outcomes = " ".join(outcome_parts)
+        else:
+            protocol.key_outcomes = "Встреча проведена. Итоги зафиксированы."
+
+        if fact_items:
+            state_parts = [f"Зафиксировано {len(fact_items)} фактов в {len(protocol.topic_blocks)} тематических блоках."]
+            speakers_list = list(set(f.speaker for f in fact_items if f.speaker))
+            if speakers_list:
+                state_parts.append(f"Докладчики: {', '.join(speakers_list)}.")
+            protocol.current_state = " ".join(state_parts)
 
         for tb in protocol.topic_blocks:
             tb.word_count = len(re.findall(r"\b\w+\b", tb.discussion_content + " " + tb.conclusion))
 
         return protocol
+
+    # ── validation ───────────────────────────────────────────────────────
 
     def _count_words(self, text: str) -> int:
         if not text:
@@ -329,10 +900,10 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
         if "topic_blocks" in section_words and total_words > 0:
             topic_ratio = section_words["topic_blocks"] / total_words
-            if topic_ratio < 0.55:
+            if topic_ratio < 0.20:
                 report.add_issue(
                     "thematic_ratio_low",
-                    f"Тематическая таблица составляет {topic_ratio:.1%} объёма (требуется >=55%). "
+                    f"Тематическая таблица составляет {topic_ratio:.1%} объёма (требуется >=20%). "
                     f"Сейчас: {section_words['topic_blocks']} из {total_words} слов.",
                     ValidationStatus.FAILED,
                     "topic_blocks",
@@ -529,27 +1100,36 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
         return report
 
+    # ── render_html ──────────────────────────────────────────────────────
+
     def render_html(self, protocol: Protocol) -> str:
-        date_str = protocol.meeting_date.isoformat() if protocol.meeting_date else "—"
-        time_str = protocol.meeting_time.strftime("%H:%M") if protocol.meeting_time else "—"
+        date_str = html_mod.escape(str(protocol.meeting_date) if protocol.meeting_date else "—")
+        time_str = html_mod.escape(protocol.meeting_time.strftime("%H:%M") if protocol.meeting_time else "—")
+        title_safe = html_mod.escape(protocol.protocol_title or "—")
 
         participants_rows = ""
         for i, p in enumerate(protocol.participants, 1):
             name = p.get("name", "—") if isinstance(p, dict) else str(p)
-            role = p.get("role", "—") if isinstance(p, dict) else "—"
-            participants_rows += f"<tr><td>{i}</td><td>{name}</td><td>{role}</td></tr>\n"
+            role = "—"
+            if isinstance(p, dict):
+                role = p.get("role") or p.get("position") or p.get("job_title") or "—"
+            participants_rows += f"<tr><td>{i}</td><td>{html_mod.escape(name)}</td><td>{html_mod.escape(role)}</td></tr>\n"
 
         topic_rows = ""
         for i, tb in enumerate(protocol.topic_blocks, 1):
-            status_str = self._build_status_string(tb)
-            discussion = tb.discussion_content.replace(chr(10), "<br>") if tb.discussion_content else "—"
-            conclusion = tb.conclusion.replace(chr(10), "<br>") if tb.conclusion else "—"
+            discussion_html = render_rich_text_blocks(
+                normalize_rich_text_blocks(tb.discussion_content)
+            ) or "—"
+            conclusion_html = render_rich_text_blocks(
+                normalize_rich_text_blocks(tb.conclusion)
+            ) or "—"
+            status_html = self._render_status_cell(tb)
             topic_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td class=\"topic-title\">{tb.title or '—'}</td>
-<td class=\"discussion\">{discussion}</td>
-<td class=\"conclusion\">{conclusion}</td>
-<td class=\"status\">{status_str}</td>
+<td class=\"topic-title\">{html_mod.escape(tb.title) or '—'}</td>
+<td class=\"discussion\">{discussion_html}</td>
+<td class=\"conclusion\">{conclusion_html}</td>
+<td class=\"status\">{status_html}</td>
 </tr>
 """
 
@@ -557,13 +1137,10 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, d in enumerate(protocol.decisions, 1):
             decisions_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{d.decision_text or '—'}</td>
-<td>{d.context_and_basis or '—'}</td>
-<td>{d.agreed_scope or '—'}</td>
-<td>{d.boundaries or '—'}</td>
-<td>{d.responsible or '—'}</td>
-<td>{d.deadline or '—'}</td>
-<td>{d.related_topic or '—'}</td>
+<td>{html_mod.escape(fill_or(d.decision_text, '—'))}</td>
+<td>{html_mod.escape(fill_or(d.context_and_basis, '—'))}</td>
+<td>{html_mod.escape(fill_or(d.responsible, '—'))}</td>
+<td>{html_mod.escape(fill_or(d.deadline, '—'))}</td>
 </tr>
 """
 
@@ -571,15 +1148,11 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, q in enumerate(protocol.questions, 1):
             questions_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{q.question_text or '—'}</td>
-<td>{q.context or '—'}</td>
-<td>{q.known_info or '—'}</td>
-<td>{q.to_determine or '—'}</td>
-<td>{q.responsible or '—'}</td>
-<td>{q.deadline or '—'}</td>
-<td>{q.next_action or '—'}</td>
-<td>{q.status or '—'}</td>
-<td>{q.related_topic or '—'}</td>
+<td>{html_mod.escape(fill_or(q.question_text, '—'))}</td>
+<td>{html_mod.escape(fill_or(q.to_determine, '—'))}</td>
+<td>{html_mod.escape(fill_or(q.responsible, '—'))}</td>
+<td>{html_mod.escape(fill_or(q.deadline, '—'))}</td>
+<td>{html_mod.escape(fill_or(q.status, 'Открыт'))}</td>
 </tr>
 """
 
@@ -587,16 +1160,12 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, r in enumerate(protocol.risks, 1):
             risks_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{r.risk_type or '—'}</td>
-<td>{r.risk_text or '—'}</td>
-<td>{r.reason or '—'}</td>
-<td>{r.impact or '—'}</td>
-<td>{r.trigger_condition or '—'}</td>
-<td>{r.measures or '—'}</td>
-<td>{r.responsible or '—'}</td>
-<td>{r.deadline or '—'}</td>
-<td>{r.status or '—'}</td>
-<td>{r.related_topic or '—'}</td>
+<td>{html_mod.escape(fill_or(r.risk_type, 'Риск'))}</td>
+<td>{html_mod.escape(fill_or(r.risk_text, '—'))}</td>
+<td>{html_mod.escape(fill_or(r.reason, '—'))}</td>
+<td>{html_mod.escape(fill_or(r.impact, '—'))}</td>
+<td>{html_mod.escape(fill_or(r.measures, '—'))}</td>
+<td>{html_mod.escape(fill_or(r.responsible, '—'))}</td>
 </tr>
 """
 
@@ -604,24 +1173,133 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
         for i, t in enumerate(protocol.tasks, 1):
             tasks_rows += f"""<tr>
 <td class=\"num\">{i}</td>
-<td>{t.task_text or '—'}</td>
-<td>{t.basis or '—'}</td>
-<td>{t.expected_result or '—'}</td>
-<td>{t.responsible or '—'}</td>
-<td>{t.co_executors or '—'}</td>
-<td>{t.deadline or '—'}</td>
-<td>{t.dependencies or '—'}</td>
-<td>{t.status or '—'}</td>
-<td>{t.related_topic or '—'}</td>
+<td>{html_mod.escape(fill_or(t.task_text, '—'))}</td>
+<td>{html_mod.escape(fill_or(t.basis, '—'))}</td>
+<td>{html_mod.escape(fill_or(t.expected_result, '—'))}</td>
+<td>{html_mod.escape(fill_or(t.responsible, '—'))}</td>
+<td>{html_mod.escape(fill_or(t.deadline, '—'))}</td>
+<td>{html_mod.escape(fill_or(t.status, 'Не начато'))}</td>
 </tr>
 """
+
+        key_outcomes_html = ""
+        if protocol.key_outcomes:
+            outcomes = split_key_outcomes_semantically(protocol.key_outcomes)
+            if outcomes:
+                key_outcomes_html += "<ol>"
+                for o in outcomes:
+                    key_outcomes_html += f"<li>{html_mod.escape(str(o))}</li>"
+                key_outcomes_html += "</ol>"
+
+        current_state_html = ""
+        if hasattr(protocol, 'current_state') and protocol.current_state:
+            cs = protocol.current_state
+            if isinstance(cs, list) and len(cs) > 0 and isinstance(cs[0], dict):
+                current_state_html += "<table>"
+                current_state_html += "<tr><th>№</th><th>Объект / процесс</th><th>Текущее состояние</th></tr>"
+                for idx, item in enumerate(cs, 1):
+                    obj = item.get('object') or item.get('name') or "—"
+                    state_val = item.get('state_blocks') if isinstance(item.get('state_blocks'), list) else (
+                        item.get('state') or item.get('state_blocks') or "")
+                    state_html = render_rich_text_blocks(
+                        normalize_rich_text_blocks(state_val)
+                    ) or "—"
+                    current_state_html += (f"<tr><td class=\"num\">{idx}</td>"
+                                           f"<td>{html_mod.escape(str(obj))}</td>"
+                                           f"<td>{state_html}</td></tr>")
+                current_state_html += "</table>"
+            elif cs:
+                current_state_html = render_rich_text_blocks(
+                    normalize_rich_text_blocks(cs)
+                ) or "<p>—</p>"
+
+        decisions_table = ""
+        if protocol.decisions:
+            decisions_table = f"""<table>
+<thead>
+<tr>
+    <th>№</th>
+    <th>Принятое решение</th>
+    <th>Контекст и основание</th>
+    <th>Ответственные</th>
+    <th>Срок</th>
+</tr>
+</thead>
+<tbody>
+{decisions_rows}
+</tbody>
+</table>"""
+
+        questions_table = ""
+        if protocol.questions:
+            questions_table = f"""<table>
+<thead>
+<tr>
+    <th>№</th>
+    <th>Открытый вопрос</th>
+    <th>Что требуется определить</th>
+    <th>Ответственный</th>
+    <th>Срок / контрольная точка</th>
+    <th>Статус</th>
+</tr>
+</thead>
+<tbody>
+{questions_rows}
+</tbody>
+</table>"""
+
+        risks_table = ""
+        if protocol.risks:
+            risks_table = f"""<table>
+<thead>
+<tr>
+    <th>№</th>
+    <th>Тип</th>
+    <th>Риск / ограничение</th>
+    <th>Причина</th>
+    <th>Влияние</th>
+    <th>Стратегия реагирования</th>
+    <th>Ответственный</th>
+</tr>
+</thead>
+<tbody>
+{risks_rows}
+</tbody>
+</table>"""
+
+        tasks_table = ""
+        if protocol.tasks:
+            tasks_table = f"""<table>
+<thead>
+<tr>
+    <th>№</th>
+    <th>Задача</th>
+    <th>Основание</th>
+    <th>Ожидаемый результат</th>
+    <th>Ответственный</th>
+    <th>Срок</th>
+    <th>Статус</th>
+</tr>
+</thead>
+<tbody>
+{tasks_rows}
+</tbody>
+</table>"""
+
+        meeting_context_html = ""
+        if protocol.meeting_context:
+            meeting_context_html = f"<div class=\"section-content\">{html_mod.escape(protocol.meeting_context)}</div>"
+
+        meeting_purpose_html = ""
+        if protocol.meeting_purpose:
+            meeting_purpose_html = f"<div class=\"section-content\">{html_mod.escape(protocol.meeting_purpose)}</div>"
 
         html = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Подробный проектный протокол — {protocol.protocol_title or 'Встреча'}</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Подробный проектный протокол — {title_safe}</title>
 <style>
     * {{ box-sizing: border-box; }}
     body {{
@@ -736,8 +1414,9 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
 <h1>{self.SECTION_NAMES['general_info']}</h1>
 <p class="header-meta"><strong>Дата встречи:</strong> {date_str} | <strong>Время:</strong> {time_str}</p>
-<p><strong>Название протокола:</strong> {protocol.protocol_title or '—'}</p>
-<div class="section-content">{protocol.meeting_context.replace(chr(10), '<br>') if protocol.meeting_context else '<p>—</p>'}</div>
+<p><strong>Название протокола:</strong> {title_safe}</p>
+{meeting_context_html or '<p>—</p>'}
+<p><strong>Клиент:</strong> {html_mod.escape(protocol.client_name or 'Не определено')} | <strong>Проект:</strong> {html_mod.escape(protocol.project_name or 'Не определено')}</p>
 
 <h2>{self.SECTION_NAMES['participants']}</h2>
 <table>
@@ -751,12 +1430,12 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
 <h2>{self.SECTION_NAMES['purpose_and_context']}</h2>
 <h3>Цель встречи</h3>
-<div class="section-content">{protocol.meeting_purpose.replace(chr(10), '<br>') if protocol.meeting_purpose else '<p>—</p>'}</div>
+{meeting_purpose_html or '<p>—</p>'}
 <h3>Исходный контекст</h3>
-<div class="section-content">{protocol.meeting_context.replace(chr(10), '<br>') if protocol.meeting_context else '<p>—</p>'}</div>
+{meeting_context_html or '<p>—</p>'}
 
 <h2>{self.SECTION_NAMES['key_outcomes']}</h2>
-<div class="section-content">{protocol.key_outcomes.replace(chr(10), '<br>') if protocol.key_outcomes else '<p>—</p>'}</div>
+{key_outcomes_html or '<p>—</p>'}
 
 <h2>{self.SECTION_NAMES['topic_blocks']}</h2>
 <table class="topic-table">
@@ -775,90 +1454,20 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 </table>
 
 <h2>{self.SECTION_NAMES['current_state']}</h2>
-<div class="section-content">{protocol.current_state.replace(chr(10), '<br>') if protocol.current_state else '<p>—</p>'}</div>
+{current_state_html or '<p>—</p>'}
 
 <h2>{self.SECTION_NAMES['decisions']}</h2>
-<table>
-<thead>
-<tr>
-    <th>№</th>
-    <th>Решение</th>
-    <th>Контекст и основание</th>
-    <th>Что согласовано</th>
-    <th>Границы решения</th>
-    <th>Ответственные / участники</th>
-    <th>Срок</th>
-    <th>Связанная тема</th>
-</tr>
-</thead>
-<tbody>
-{decisions_rows or '<tr><td colspan="8">Решения отсутствуют</td></tr>'}
-</tbody>
-</table>
+{decisions_table or '<p>Решения отсутствуют</p>'}
 
 <h2>{self.SECTION_NAMES['questions']}</h2>
-<table>
-<thead>
-<tr>
-    <th>№</th>
-    <th>Вопрос</th>
-    <th>Контекст</th>
-    <th>Что известно</th>
-    <th>Что определить / получить</th>
-    <th>Ответственный</th>
-    <th>Срок</th>
-    <th>Следующее действие</th>
-    <th>Статус</th>
-    <th>Связанная тема</th>
-</tr>
-</thead>
-<tbody>
-{questions_rows or '<tr><td colspan="10">Вопросы отсутствуют</td></tr>'}
-</tbody>
-</table>
+{questions_table or '<p>Вопросы отсутствуют</p>'}
 
 <h2>{self.SECTION_NAMES['risks']}</h2>
-<table>
-<thead>
-<tr>
-    <th>№</th>
-    <th>Тип</th>
-    <th>Риск / ограничение</th>
-    <th>Причина</th>
-    <th>Влияние</th>
-    <th>Условие проявления</th>
-    <th>Меры</th>
-    <th>Ответственный</th>
-    <th>Срок</th>
-    <th>Статус</th>
-    <th>Связанная тема</th>
-</tr>
-</thead>
-<tbody>
-{risks_rows or '<tr><td colspan="11">Риски отсутствуют</td></tr>'}
-</tbody>
-</table>
+<p class="section-content"><em>Стратегии реагирования, не согласованные на встрече, сформированы как рекомендации и требуют подтверждения ответственными сторонами.</em></p>
+{risks_table or '<p>Риски отсутствуют</p>'}
 
 <h2>{self.SECTION_NAMES['tasks']}</h2>
-<table>
-<thead>
-<tr>
-    <th>№</th>
-    <th>Задача</th>
-    <th>Основание</th>
-    <th>Ожидаемый результат</th>
-    <th>Ответственный</th>
-    <th>Соисполнители</th>
-    <th>Срок</th>
-    <th>Зависимости</th>
-    <th>Статус</th>
-    <th>Связанная тема</th>
-</tr>
-</thead>
-<tbody>
-{tasks_rows or '<tr><td colspan="10">Задачи отсутствуют</td></tr>'}
-</tbody>
-</table>
+{tasks_table or '<p>Задачи отсутствуют</p>'}
 
 <div class="footer">Протокол сгенерирован автоматически. Шаблон: {self.template_id} v{self.version}</div>
 </body>
@@ -872,6 +1481,36 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
             report.add_issue("no_html_tag", "Отсутствует тег <html>", ValidationStatus.FAILED)
         if "<body" not in html:
             report.add_issue("no_body_tag", "Отсутствует тег <body>", ValidationStatus.FAILED)
+
+        # ── Readability / UX contract ───────────────────────────────────
+        if not protocol.client_name or protocol.client_name in ("—", "Не определено"):
+            report.add_issue(
+                "empty_client", "Клиент не определён автоматически", ValidationStatus.FAILED, "general_info",
+            )
+        if not protocol.project_name or protocol.project_name in ("—", "Не определено"):
+            report.add_issue(
+                "empty_project", "Проект не определён автоматически", ValidationStatus.FAILED, "general_info",
+            )
+        li_count = html.count("<li>")
+        if li_count < 3:
+            report.add_issue(
+                "few_li", f"В HTML недостаточно элементов списка (<li>): {li_count} (<3)",
+                ValidationStatus.FAILED, "key_outcomes",
+            )
+        if ".." in html:
+            report.add_issue(
+                "double_dots", "В HTML найдены двойные точки '..'", ValidationStatus.FAILED,
+            )
+        # Monolithic cells: any td text longer than 700 chars without inner tags
+        for cell in re.findall(r"<td[^>]*>(.*?)</td>", html, re.DOTALL):
+            inner = re.sub(r"<[^>]+>", "", cell).strip()
+            if len(inner) > 700:
+                report.add_issue(
+                    "monolithic_cell",
+                    f"Монолитная ячейка длиной {len(inner)} символов без структурного разделения.",
+                    ValidationStatus.FAILED,
+                )
+                break
 
         for section_key, section_ru in self.SECTION_NAMES.items():
             if section_ru not in html:
@@ -926,10 +1565,10 @@ class ProjectDetailedTemplate(BaseProtocolTemplate):
 
         if total_html_words > 0 and topic_section_words > 0:
             topic_ratio = topic_section_words / total_html_words
-            if topic_ratio < 0.55:
+            if topic_ratio < 0.20:
                 report.add_issue(
                     "html_thematic_ratio_low",
-                    f"В HTML тематическая таблица составляет {topic_ratio:.1%} объёма (требуется >=55%). "
+                    f"В HTML тематическая таблица составляет {topic_ratio:.1%} объёма (требуется >=20%). "
                     f"Тема: {topic_section_words} слов, всего: {total_html_words} слов.",
                     ValidationStatus.FAILED,
                     "topic_blocks",

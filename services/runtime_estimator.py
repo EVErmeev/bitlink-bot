@@ -1,7 +1,6 @@
 import json
-import time
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
 
 HISTORY_FILE = Path(__file__).resolve().parent / "data" / "runtime_history.json"
 
@@ -19,9 +18,9 @@ class RuntimeEstimator:
     def _load(self):
         if HISTORY_FILE.exists():
             try:
-                with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                with open(HISTORY_FILE, encoding="utf-8") as f:
                     self._history = json.load(f)
-            except (json.JSONDecodeError, IOError):
+            except (OSError, json.JSONDecodeError):
                 self._history = []
 
     def _save(self):

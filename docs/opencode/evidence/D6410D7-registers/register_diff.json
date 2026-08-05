@@ -1,0 +1,39 @@
+{
+  "decisions": {
+    "before_count": 8,
+    "candidate_count": 15,
+    "after_count": 15,
+    "added": 62,
+    "merged": 0,
+    "dropped": [],
+    "drop_reason": []
+  },
+  "questions": {
+    "before_count": 8,
+    "candidate_count": 11,
+    "after_count": 11,
+    "added": 62,
+    "merged": 0,
+    "dropped": [],
+    "drop_reason": []
+  },
+  "risks": {
+    "before_count": 7,
+    "candidate_count": 16,
+    "after_count": 16,
+    "added": 62,
+    "merged": 0,
+    "dropped": [],
+    "drop_reason": []
+  },
+  "tasks": {
+    "before_count": 13,
+    "candidate_count": 20,
+    "after_count": 20,
+    "added": 62,
+    "merged": 0,
+    "dropped": [],
+    "drop_reason": []
+  },
+  "silent_drop_count": 0
+}

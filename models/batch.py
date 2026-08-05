@@ -1,7 +1,6 @@
-from dataclasses import dataclass, field
-from datetime import datetime
-from pathlib import Path
 import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -20,6 +19,7 @@ class BatchItem:
     parent_page_id: str | None = None
     parent_page_title: str | None = None
     send_telegram: bool = True
+    dry_run: bool = False
     source_context_id: str | None = None
     source_sha256: str | None = None
     status: str = "pending"
@@ -29,6 +29,8 @@ class BatchItem:
     error_details: str | None = None
     estimated_seconds: float | None = None
     actual_seconds: float | None = None
+    client_name: str = ""
+    project_name: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -46,6 +48,7 @@ class BatchItem:
             "parent_page_id": self.parent_page_id,
             "parent_page_title": self.parent_page_title,
             "send_telegram": self.send_telegram,
+            "dry_run": self.dry_run,
             "source_context_id": self.source_context_id,
             "source_sha256": self.source_sha256,
             "status": self.status,
@@ -55,6 +58,8 @@ class BatchItem:
             "error_details": self.error_details,
             "estimated_seconds": self.estimated_seconds,
             "actual_seconds": self.actual_seconds,
+            "client_name": self.client_name,
+            "project_name": self.project_name,
         }
 
     @classmethod
@@ -75,6 +80,7 @@ class BatchItem:
         item.parent_page_id = d.get("parent_page_id")
         item.parent_page_title = d.get("parent_page_title")
         item.send_telegram = d.get("send_telegram", True)
+        item.dry_run = d.get("dry_run", False)
         item.source_context_id = d.get("source_context_id")
         item.source_sha256 = d.get("source_sha256")
         item.status = d.get("status", "pending")
@@ -85,6 +91,8 @@ class BatchItem:
         item.error_details = d.get("error_details")
         item.estimated_seconds = d.get("estimated_seconds")
         item.actual_seconds = d.get("actual_seconds")
+        item.client_name = d.get("client_name", "")
+        item.project_name = d.get("project_name", "")
         return item
 
 

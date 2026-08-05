@@ -1,0 +1,128 @@
+[
+  {
+    "name": "15_15_26_10_30_00_video.mp4",
+    "date": null,
+    "time": null,
+    "diag": {
+      "meeting_date": null,
+      "meeting_time": null,
+      "source": "none",
+      "matched_format": null,
+      "filename_basename": "15_15_26_10_30_00_video.mp4",
+      "invalid_candidates_count": 1,
+      "fallback_used": true
+    }
+  },
+  {
+    "name": "31_15_26_10_30_00_video.mp4",
+    "date": null,
+    "time": null,
+    "diag": {
+      "meeting_date": null,
+      "meeting_time": null,
+      "source": "none",
+      "matched_format": null,
+      "filename_basename": "31_15_26_10_30_00_video.mp4",
+      "invalid_candidates_count": 1,
+      "fallback_used": true
+    }
+  },
+  {
+    "name": "2026_15_31_10_30_00_video.mp4",
+    "date": null,
+    "time": null,
+    "diag": {
+      "meeting_date": null,
+      "meeting_time": null,
+      "source": "none",
+      "matched_format": null,
+      "filename_basename": "2026_15_31_10_30_00_video.mp4",
+      "invalid_candidates_count": 1,
+      "fallback_used": true
+    }
+  },
+  {
+    "name": "2026_02_30_10_30_00_video.mp4",
+    "date": null,
+    "time": null,
+    "diag": {
+      "meeting_date": null,
+      "meeting_time": null,
+      "source": "none",
+      "matched_format": null,
+      "filename_basename": "2026_02_30_10_30_00_video.mp4",
+      "invalid_candidates_count": 1,
+      "fallback_used": true
+    }
+  },
+  {
+    "name": "2026_08_05_25_30_00_video.mp4",
+    "date": null,
+    "time": null,
+    "diag": {
+      "meeting_date": null,
+      "meeting_time": null,
+      "source": "none",
+      "matched_format": null,
+      "filename_basename": "2026_08_05_25_30_00_video.mp4",
+      "invalid_candidates_count": 1,
+      "fallback_used": true
+    }
+  },
+  {
+    "name": "2026_08_05_15_70_00_video.mp4",
+    "date": null,
+    "time": null,
+    "diag": {
+      "meeting_date": null,
+      "meeting_time": null,
+      "source": "none",
+      "matched_format": null,
+      "filename_basename": "2026_08_05_15_70_00_video.mp4",
+      "invalid_candidates_count": 1,
+      "fallback_used": true
+    }
+  },
+  {
+    "name": "local-872b2e3cdd76beb0_transcript.txt",
+    "date": null,
+    "time": null,
+    "diag": {
+      "meeting_date": null,
+      "meeting_time": null,
+      "source": "none",
+      "matched_format": null,
+      "filename_basename": "local-872b2e3cdd76beb0_transcript.txt",
+      "invalid_candidates_count": 0,
+      "fallback_used": true
+    }
+  },
+  {
+    "name": "meeting_15_30_45_recording.mp4",
+    "date": null,
+    "time": null,
+    "diag": {
+      "meeting_date": null,
+      "meeting_time": null,
+      "source": "none",
+      "matched_format": null,
+      "filename_basename": "meeting_15_30_45_recording.mp4",
+      "invalid_candidates_count": 0,
+      "fallback_used": true
+    }
+  },
+  {
+    "name": "recording_01_30_15_22_44_99.mp4",
+    "date": null,
+    "time": null,
+    "diag": {
+      "meeting_date": null,
+      "meeting_time": null,
+      "source": "none",
+      "matched_format": null,
+      "filename_basename": "recording_01_30_15_22_44_99.mp4",
+      "invalid_candidates_count": 1,
+      "fallback_used": true
+    }
+  }
+]

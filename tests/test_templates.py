@@ -1,14 +1,19 @@
-import pytest
 import sys
-from pathlib import Path
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.protocol import (
-    Protocol, TopicBlock, DecisionItem, QuestionItem, RiskItem, TaskItem
+    DecisionItem,
+    Protocol,
+    QuestionItem,
+    RiskItem,
+    TaskItem,
+    TopicBlock,
 )
-from models.validation import ValidationReport, ValidationStatus
 from protocol_templates.registry import TemplateRegistry
 
 

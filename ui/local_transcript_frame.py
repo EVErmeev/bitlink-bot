@@ -1,8 +1,9 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
-from models.batch import BatchItem
+from tkinter import filedialog, messagebox, ttk
+
 from meeting_metadata import count_words
+from models.batch import BatchItem
 
 
 class LocalTranscriptFrame(ttk.Frame):

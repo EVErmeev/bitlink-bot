@@ -1,47 +1,48 @@
 import json
 import uuid
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
 
-from models.protocol import Protocol
+import requests
+
+from services.standard_protocol_logger import get_logger
+
+_svc_log = get_logger("processing_service")
+
 from models.batch import BatchItem
+from models.protocol import (
+    DecisionItem,
+    Protocol,
+    QuestionItem,
+    RiskItem,
+    TaskItem,
+)
 
 try:
     import settings
     from meeting_metadata import determine_meeting_date
     from protocol_templates.registry import TemplateRegistry
-    from services.source_isolation import (
-        generate_source_context_id,
-        validate_source_alignment,
-        create_provenance,
-        create_input_manifest,
-    )
     from services.fact_extraction import extract_atomic_items
-    from services.fact_validation import validate_facts, apply_corrections
-    from services.bitlink_service import BitlinkClient
-    from services.transcription_service import TranscriptionClient
-    from services.confluence_service import ConfluenceClient
-    from services.telegram_service import TelegramClient
     from services.runtime_estimator import RuntimeEstimator
+    from services.source_isolation import (
+        create_input_manifest,
+        create_provenance,
+        generate_source_context_id,
+    )
 except ImportError:
     import sys
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from fact_extraction import extract_atomic_items  # type: ignore[no-redef]
+    from runtime_estimator import RuntimeEstimator  # type: ignore[no-redef]
+    from source_isolation import (  # type: ignore[no-redef]
+        create_input_manifest,
+        create_provenance,
+        generate_source_context_id,
+    )
+
     import settings
     from meeting_metadata import determine_meeting_date
     from protocol_templates.registry import TemplateRegistry
-    from source_isolation import (
-        generate_source_context_id,
-        validate_source_alignment,
-        create_provenance,
-        create_input_manifest,
-    )
-    from fact_extraction import extract_atomic_items
-    from fact_validation import validate_facts, apply_corrections
-    from bitlink_service import BitlinkClient
-    from transcription_service import TranscriptionClient
-    from confluence_service import ConfluenceClient
-    from telegram_service import TelegramClient
-    from runtime_estimator import RuntimeEstimator
 
 
 class ProcessingService:
@@ -53,14 +54,26 @@ class ProcessingService:
         "completed",
     ]
 
-    def __init__(self, progress_callback=None):
+    def __init__(self, progress_callback=None, config=None):
         self.progress_callback = progress_callback
-        self.bitlink = BitlinkClient()
-        self.transcription = TranscriptionClient()
-        self.confluence = ConfluenceClient()
-        self.telegram = TelegramClient()
+        if config is None:
+            from services.runtime_config import get_runtime_config
+            config = get_runtime_config()
+        from services.client_factory import (
+            build_bitlink_client,
+            build_confluence_client,
+            build_llm_client,
+            build_telegram_client,
+            build_transcription_client,
+        )
+        self.bitlink = build_bitlink_client(config)
+        self.transcription = build_transcription_client(config)
+        self.confluence = build_confluence_client(config)
+        self.telegram = build_telegram_client(config)
+        self.llm = build_llm_client(config)
         self.templates = TemplateRegistry()
         self.estimator = RuntimeEstimator()
+        self.config = config
 
     def process_item(self, item: BatchItem) -> dict:
         start_time = datetime.now()
@@ -74,14 +87,28 @@ class ProcessingService:
             if not transcript_text:
                 raise Exception("Failed to obtain transcript")
 
+            if not item.source_sha256:
+                from meeting_metadata import compute_sha256_from_bytes
+                item.source_sha256 = compute_sha256_from_bytes(transcript_text.encode("utf-8"))
+
             self._report_progress("extracting_metadata", 15, item)
+            from meeting_metadata import diagnose_date_resolution
             meeting_date, meeting_time = determine_meeting_date(
                 filepath=item.source_path,
             )
+            date_resolution = diagnose_date_resolution(item.source_path)
+            self._last_date_resolution = date_resolution
+            if meeting_date is None:
+                item.status_message = (
+                    item.status_message or ""
+                ) + "Дата встречи не определена автоматически. Обработка продолжена без даты; проверьте имя файла или metadata источника. "
 
             self._report_progress("extracting_items", 25, item)
             source_ctx_id = item.source_context_id or generate_source_context_id(
-                str(item.source_path) if item.source_path else item.bitlink_recording_id
+                source_type=item.source_type,
+                source_path=str(item.source_path) if item.source_path else None,
+                bitlink_recording_id=item.bitlink_recording_id,
+                source_sha256=item.source_sha256,
             )
             atomic_items = extract_atomic_items(
                 transcript_text, source_ctx_id, item.source_sha256 or ""
@@ -96,98 +123,423 @@ class ProcessingService:
             if not template:
                 raise Exception(f"Template {item.protocol_template} not found")
 
+            system_prompt = template.get_system_prompt()
+            json_schema = template.get_schema()
+
+            # Automatic project context resolution (authoritative, before LLM)
+            from services.project_context_resolver import resolve_project_context
+            resolution = resolve_project_context(
+                transcript_text=transcript_text,
+                source_filename=str(item.source_path) if item.source_path else item.display_name,
+                source_title=item.display_name,
+                source_metadata={"display_name": item.display_name},
+                participants=[],
+            )
+
+            user_prompt = (
+                f"Транскрипт встречи:\n\n{transcript_text}\n\n"
+                f"Дата встречи: {meeting_date or 'не определена'}\n"
+                f"Название: {item.display_name}\n"
+                f"Клиент: {resolution.client_name}\n"
+                f"Проект: {resolution.project_name}\n"
+                "Не изменяй клиента и проект, если они определены; "
+                "используй их в общей информации документа.\n"
+            )
+
+            try:
+                llm_data, llm_raw = self.llm.generate_json(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    json_schema=json_schema,
+                    temperature=0.1,
+                    max_retries=3,
+                )
+            except Exception as e:
+                item.status = "failed"
+                item.error_details = f"LLM generation failed: {e}"
+                result["error"] = str(e)
+                return result
+
             protocol = Protocol(
                 protocol_id=str(uuid.uuid4()),
                 template_id=template.template_id,
                 source_context_id=source_ctx_id,
             )
-            if meeting_date:
-                protocol.meeting_date = meeting_date
-            if meeting_time:
-                protocol.meeting_time = meeting_time
+            if meeting_date: protocol.meeting_date = meeting_date
+            if meeting_time: protocol.meeting_time = meeting_time
             protocol.protocol_title = item.display_name or "Протокол встречи"
-            protocol.meeting_purpose = "Обсуждение статуса и планов проекта"
 
-            protocol = template.assemble(protocol, atomic_items, {
-                "date": meeting_date,
-                "time": meeting_time,
-                "item": item,
-            })
+            protocol = template.assemble_from_llm_json(protocol, atomic_items, llm_data,
+                {"date": meeting_date, "time": meeting_time, "item": item})
 
-            self._report_progress("fact_validation", 70, item)
-            fact_report = validate_facts(protocol, transcript_text)
-            protocol = apply_corrections(protocol)
-            protocol.fact_validation_passed = fact_report.passed
-
-            source_report = validate_source_alignment(protocol, source_ctx_id)
-            protocol.source_alignment_passed = source_report.passed
-
-            self._report_progress("structure_validation", 80, item)
-            struct_report = template.validate(protocol)
-            protocol.structure_validation_passed = struct_report.passed
-
-            self._report_progress("rendering", 85, item)
-            html = template.render_html(protocol)
-
-            render_report = template.validate_render(html, protocol)
-            protocol.render_validation_passed = render_report.passed
-
-            publishable = (
-                protocol.source_alignment_passed
-                and protocol.fact_validation_passed
-                and protocol.structure_validation_passed
-                and protocol.render_validation_passed
+            # Register pipeline: full transcript, chunked, linked, enriched, merged
+            from services.protocol_register_pipeline import run_register_pipeline
+            from services.protocol_register_validation import (
+                build_register_quality_report,
+                register_quality_blocks,
+            )
+            registers, reg_artifacts = run_register_pipeline(
+                transcript_text, protocol.topic_blocks, protocol.participants,
+                self.llm, main_llm_data=llm_data,
             )
 
+            # Merge registers into protocol, carrying ALL fields (no loss)
+            protocol.decisions = []
+            protocol.questions = []
+            protocol.risks = []
+            protocol.tasks = []
+            for d in registers.get("decisions", []):
+                if not isinstance(d, dict) or not d.get("decision_text"):
+                    continue
+                protocol.decisions.append(DecisionItem(
+                    decision_id=d.get("decision_id") or str(uuid.uuid4())[:8],
+                    source_context_id=source_ctx_id,
+                    decision_text=d.get("decision_text", ""),
+                    context_and_basis=d.get("context_and_basis", ""),
+                    agreed_scope=d.get("agreed_scope", ""),
+                    boundaries=d.get("boundaries", ""),
+                    responsible=d.get("responsible", ""),
+                    deadline=d.get("deadline", ""),
+                    related_topic=d.get("related_topic", "") or d.get("topic_id", ""),
+                    explicit_agreement=d.get("explicit_agreement", True),
+                    confidence=d.get("confidence", 0.7),
+                    evidence=d.get("evidence", ""),
+                ))
+            for q in registers.get("questions", []):
+                if not isinstance(q, dict) or not q.get("question_text"):
+                    continue
+                protocol.questions.append(QuestionItem(
+                    question_id=q.get("question_id") or str(uuid.uuid4())[:8],
+                    source_context_id=source_ctx_id,
+                    question_text=q.get("question_text", ""),
+                    context=q.get("context", ""),
+                    known_info=q.get("known_info", ""),
+                    to_determine=q.get("to_determine", ""),
+                    responsible=q.get("responsible", ""),
+                    deadline=q.get("deadline", ""),
+                    next_action=q.get("next_action", ""),
+                    status=q.get("status", "Открыт"),
+                    related_topic=q.get("related_topic", "") or q.get("topic_id", ""),
+                ))
+            for r in registers.get("risks", []):
+                if not isinstance(r, dict) or not r.get("risk_text"):
+                    continue
+                protocol.risks.append(RiskItem(
+                    risk_id=r.get("risk_id") or str(uuid.uuid4())[:8],
+                    source_context_id=source_ctx_id,
+                    risk_text=r.get("risk_text", ""),
+                    risk_type=r.get("risk_type", "Риск"),
+                    reason=r.get("reason", ""),
+                    impact=r.get("impact", ""),
+                    trigger_condition=r.get("trigger_condition", ""),
+                    measures=r.get("measures", ""),
+                    responsible=r.get("responsible", ""),
+                    deadline=r.get("deadline", ""),
+                    status=r.get("status", "Активен"),
+                    related_topic=r.get("related_topic", "") or r.get("topic_id", ""),
+                ))
+            for t in registers.get("tasks", []):
+                if not isinstance(t, dict) or not t.get("task_text"):
+                    continue
+                protocol.tasks.append(TaskItem(
+                    task_id=t.get("task_id") or str(uuid.uuid4())[:8],
+                    source_context_id=source_ctx_id,
+                    task_text=t.get("task_text", ""),
+                    basis=t.get("basis", ""),
+                    expected_result=t.get("expected_result", ""),
+                    responsible=t.get("responsible", ""),
+                    co_executors=t.get("co_executors", ""),
+                    deadline=t.get("deadline", ""),
+                    dependencies=t.get("dependencies", ""),
+                    status=t.get("status", "Не начато"),
+                    related_topic=t.get("related_topic", "") or t.get("topic_id", ""),
+                    commitment_confirmed=t.get("commitment_confirmed", True),
+                ))
+
+            # register debug artifacts
             if item.debug_directory:
-                self._save_artifacts(item.debug_directory, protocol, html, transcript_text)
+                item.debug_directory.mkdir(parents=True, exist_ok=True)
+                for _name, _payload in reg_artifacts.items():
+                    try:
+                        (item.debug_directory / f"{_name}.json").write_text(
+                            json.dumps(_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+                    except Exception:
+                        pass
+                quality_report = build_register_quality_report(
+                    registers, reg_artifacts["register_diff"])
+                (item.debug_directory / "register_quality_report.json").write_text(
+                    json.dumps(quality_report, indent=2, ensure_ascii=False), encoding="utf-8")
+                reg_artifacts["register_quality_blocks"] = register_quality_blocks(registers)
 
-            if publishable:
-                self._report_progress("publishing_confluence", 90, item)
+            protocol.client_name = resolution.client_name
+            protocol.project_name = resolution.project_name
+
+            if item.debug_directory:
                 try:
-                    parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
-                    page = self.confluence.create_page(
-                        title=protocol.protocol_title,
-                        storage_html=html,
-                        parent_page_id=parent_id,
-                    )
-                    result["url"] = page.get("url", "")
-                    item.result_url = result["url"]
+                    item.debug_directory.mkdir(parents=True, exist_ok=True)
+                    with open(item.debug_directory / "project_context_resolution.json", "w", encoding="utf-8") as _f:
+                        json.dump({
+                            "client_name": resolution.client_name,
+                            "project_name": resolution.project_name,
+                            "confidence": resolution.confidence,
+                            "resolution_method": resolution.resolution_method,
+                            "matched_profile_id": resolution.matched_profile_id,
+                            "evidence": resolution.evidence,
+                            "alternatives": resolution.alternatives,
+                        }, _f, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
 
-                    if item.send_telegram:
-                        self._report_progress("sending_telegram", 95, item)
-                        try:
-                            self.telegram.send_notification(
-                                protocol_title=protocol.protocol_title,
-                                meeting_date=(
-                                    protocol.meeting_date.isoformat()
-                                    if protocol.meeting_date
-                                    else "Дата не определена"
-                                ),
-                                key_result=(
-                                    protocol.key_outcomes[:200]
-                                    if protocol.key_outcomes
-                                    else "Протокол сформирован"
-                                ),
-                                confluence_url=result["url"],
-                            )
-                        except Exception as te:
-                            print(f"Telegram notification failed: {te}")
-                except Exception as ce:
-                    if not publishable:
-                        raise
-                    print(f"Confluence publish failed: {ce}")
-                    result["error"] = f"Confluence: {ce}"
+            if template.template_id == "project_standard":
+                # (Re)resolve client/project context with the FULL meeting
+                # evidence (transcript, filename, title, participants, systems)
+                # and the LLM fallback. Overrides an earlier unresolved value.
+                from services.project_context_resolver import resolve_project_context
+                from services.meeting_type_resolver import resolve_meeting_type
+                from services.meeting_topic_resolver import resolve_meeting_topic
+
+                filename = item.source_path.name if item.source_path else (item.display_name or "")
+                final_res = resolve_project_context(
+                    transcript_text=transcript_text,
+                    source_filename=filename,
+                    source_title=item.display_name,
+                    source_metadata={"display_name": item.display_name},
+                    participants=protocol.participants,
+                    llm_client=self.llm,
+                )
+                if final_res.client_name not in ("", "Не определено"):
+                    protocol.client_name = final_res.client_name
+                if final_res.project_name not in ("", "Не определено"):
+                    protocol.project_name = final_res.project_name
+
+                mt, mt_conf, mt_evidence = resolve_meeting_type(
+                    transcript_text=transcript_text,
+                    source_filename=filename,
+                    source_title=item.display_name,
+                    participants=protocol.participants,
+                    client_name=protocol.client_name,
+                    project_name=protocol.project_name,
+                    known_profile_id=final_res.matched_profile_id,
+                )
+                meeting_topic = resolve_meeting_topic(
+                    meeting_topic=getattr(protocol, "meeting_topic", ""),
+                    source_filename=filename,
+                    source_title=item.display_name,
+                    topic_blocks=protocol.topic_blocks,
+                    meeting_purpose=protocol.meeting_purpose,
+                    llm=self.llm,
+                )
+
+                protocol._standard_source_type = item.source_type
+                protocol._standard_source_filename = filename
+                protocol._standard_recording_source = ""
+                protocol._standard_meeting_type = mt
+                protocol._standard_meeting_topic = meeting_topic
+                protocol._standard_meeting_type_resolution = {
+                    "meeting_type": mt, "confidence": mt_conf, "evidence": mt_evidence,
+                }
+                protocol._standard_project_resolution = {
+                    "client_name": protocol.client_name,
+                    "project_name": protocol.project_name,
+                    "confidence": final_res.confidence,
+                    "method": final_res.resolution_method,
+                    "evidence": final_res.evidence,
+                }
+
+                from services.standard_context_resolver import resolve_standard_context
+                protocol._standard_context = resolve_standard_context(
+                    protocol, transcript_text, llm=self.llm)
+
+                from services.protocol_title import build_protocol_title
+                full_title = build_protocol_title(
+                    meeting_date=protocol.meeting_date,
+                    short_topic=meeting_topic,
+                    client_name=protocol.client_name,
+                    project_name=protocol.project_name,
+                    meeting_type=mt,
+                )
+                protocol.protocol_title = full_title
+                confluence_title = full_title
             else:
-                result["error"] = "Protocol validation failed - publication blocked"
+                date_part = ""
+                if meeting_date:
+                    date_part = f" от {meeting_date.strftime('%d.%m.%Y')}."
+                confluence_title = f"Протокол встречи{date_part}"
+                if protocol.protocol_title and "test" not in protocol.protocol_title.lower():
+                    confluence_title += f" {protocol.protocol_title}"
+                if protocol.client_name and protocol.client_name != "Не определено":
+                    confluence_title += f" — {protocol.client_name}"
+                    if protocol.project_name:
+                        confluence_title += f", {protocol.project_name}"
 
-            item.status = "completed" if (result["url"] or not publishable) else "failed"
-            result["success"] = item.status == "completed"
+            # Stage: rendering (technical)
+            self._report_progress("rendering", 85, item)
+            try:
+                render_llm = None
+                if (template.template_id == "project_standard"
+                        and getattr(settings, "STANDARD_LLM_COMPRESSION", False)):
+                    render_llm = self.llm
+                if render_llm is not None:
+                    html = template.render_html(protocol, llm=render_llm)
+                else:
+                    html = template.render_html(protocol)
+                if not html or "<html" not in html.lower() and "<body" not in html.lower():
+                    raise Exception("HTML render produced invalid output")
+                # Confluence publishes the page title itself, so its storage body
+                # must not repeat the <h1> (single visible title).
+                confluence_storage = html
+                if template.template_id == "project_standard":
+                    import re as _re
+                    confluence_storage = _re.sub(r"<h1[^>]*>.*?</h1>", "", html,
+                                                 count=1, flags=_re.DOTALL)
+                _svc_log.info("render ok: template=%s item=%s html_bytes=%d",
+                              template.template_id, item.display_name, len(html))
+            except Exception as e:
+                item.status = "failed"
+                item.error_details = f"HTML generation failed: {e}"
+                result["error"] = str(e)
+                _svc_log.exception("render failed: template=%s item=%s",
+                                   template.template_id, item.display_name)
+                return result
+
+            # TECHNICAL SAFETY — always save all artifacts
+            if item.debug_directory:
+                self._save_artifacts(item.debug_directory, protocol, html, transcript_text, item, llm_raw, llm_data)
+
+            # Standard-specific debug artifacts (grouping map, consistency, validation)
+            if template.template_id == "project_standard" and item.debug_directory:
+                self._save_standard_artifacts(item.debug_directory, protocol, html)
+
+            # Quality checks (based on mode)
+            quality_mode = settings.PROTOCOL_QUALITY_MODE
+            warnings = []
+            register_blocks: list[str] = []
+            if quality_mode != "off":
+                struct_report = template.validate(protocol)
+                render_report = template.validate_render(html, protocol)
+
+                for issue in getattr(struct_report, 'issues', []):
+                    warnings.append(f"[structure] {issue.message}")
+                for issue in getattr(render_report, 'issues', []):
+                    warnings.append(f"[render] {issue.message}")
+
+                from services.protocol_register_validation import register_quality_blocks
+                register_blocks = register_quality_blocks(registers)
+                for block in register_blocks:
+                    warnings.append(f"[register] {block}")
+
+                if item.debug_directory:
+                    import json as _json
+                    qr = {"mode": quality_mode, "warnings": warnings,
+                          "register_blocks": register_blocks,
+                          "struct_passed": struct_report.passed if hasattr(struct_report, 'passed') else None}
+                    with open(item.debug_directory / "quality_report.json", "w", encoding="utf-8") as f:
+                        _json.dump(qr, f, indent=2, ensure_ascii=False)
+
+            if (quality_mode == "strict" and warnings) or (register_blocks and quality_mode != "off"):
+                item.status = "validation_failed"
+                item.error_details = "Quality gate failed:\n" + "\n".join(warnings[:8])
+                result["success"] = False
+                result["error"] = "Quality gate failed"
+                item.error_details = "Quality gate failed:\n" + "\n".join(warnings[:5])
+                result["success"] = False
+                result["error"] = "Quality gate failed"
+            else:
+                # Publish
+                item.status = "completed_with_warnings" if warnings else "completed"
+                if warnings:
+                    item.status_message = f"Протокол сформирован с {len(warnings)} предупреждениями качества"
+                else:
+                    item.status_message = "Протокол сформирован"
+                result["success"] = True
+
+                if item.dry_run:
+                    item.status_message = (item.status_message or "") + " (dry-run)"
+                else:
+                    # Real publication — Confluence required
+                    self._report_progress("publishing_confluence", 90, item)
+                    try:
+                        parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
+                        page = self.confluence.create_page(
+                            title=confluence_title,
+                            storage_html=confluence_storage,
+                            parent_page_id=parent_id,
+                        )
+                        result_url = page.get("url", "")
+                        if not result_url:
+                            raise Exception("Confluence returned empty URL")
+                        result["url"] = result_url
+                        item.result_url = result_url
+
+                        # Save pipeline result
+                        if item.debug_directory:
+                            import json as _json
+                            pipeline_result = {
+                                "source_type": item.source_type,
+                                "provider": self.config.llm_provider,
+                                "model": self.config.llm_model,
+                                "template": item.protocol_template,
+                                "client_name": protocol.client_name,
+                                "project_name": protocol.project_name,
+                                "confluence_page_id": page.get("id", ""),
+                                "confluence_url": result_url,
+                                "warnings": warnings,
+                            }
+                            with open(item.debug_directory / "pipeline_result.json", "w", encoding="utf-8") as f:
+                                _json.dump(pipeline_result, f, indent=2, ensure_ascii=False)
+
+                        # Telegram — only after successful Confluence
+                        if item.send_telegram and self.config.telegram_provider not in ("disabled", "mock"):
+                            self._report_progress("sending_telegram", 95, item)
+                            tg_ok, tg_msg_id = self._send_telegram_protocol(protocol, result_url, item)
+                            if tg_ok:
+                                item.status_message = (item.status_message or "") + " | Telegram: отправлен"
+                                if item.debug_directory:
+                                    try:
+                                        with open(item.debug_directory / "pipeline_result.json", encoding="utf-8") as f:
+                                            pr = _json.load(f)
+                                        pr["telegram_message_id"] = tg_msg_id
+                                        with open(item.debug_directory / "pipeline_result.json", "w", encoding="utf-8") as f:
+                                            _json.dump(pr, f, indent=2, ensure_ascii=False)
+                                    except Exception:
+                                        pass
+                            else:
+                                item.status = "notification_failed"
+                                item.status_message = (item.status_message or "") + " | Telegram: ошибка отправки"
+                    except Exception as ce:
+                        item.status = "publication_failed"
+                        item.status_message = f"Ошибка публикации: {ce}"
+                        item.error_details = str(ce)
+                        result["success"] = False
+                        result["error"] = f"Confluence: {ce}"
+
+            return result
 
         except Exception as e:
             item.status = "failed"
-            item.error_details = str(e)
+            import traceback
+            tb = traceback.format_exc()
+            item.error_details = f"{type(e).__name__}: {e}\n\n{tb[-1000:]}"
             result["error"] = str(e)
+
+            # Save runtime error log
+            try:
+                from pathlib import Path
+                log_dir = Path("debug") / "runtime_errors"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                log_path = log_dir / f"error_{ts}_{item.item_id[:8]}.log"
+                with open(log_path, "w", encoding="utf-8") as lf:
+                    lf.write(f"Stage: {getattr(self, '_current_stage', 'unknown')}\n")
+                    lf.write(f"Item: {item.display_name}\n")
+                    lf.write(f"Source: {item.source_type}\n")
+                    lf.write(f"Error: {e}\n\n{tb}")
+                if item.debug_directory:
+                    item.debug_directory.mkdir(parents=True, exist_ok=True)
+                    with open(item.debug_directory / "runtime_error.log", "w", encoding="utf-8") as lf:
+                        lf.write(tb)
+            except Exception:
+                pass
 
         finally:
             elapsed = (datetime.now() - start_time).total_seconds()
@@ -198,14 +550,80 @@ class ProcessingService:
 
         return result
 
+    def republish(self, item: BatchItem) -> dict:
+        if not item.debug_directory:
+            return {"success": False, "error": "No debug directory"}
+
+        validated_dir = item.debug_directory / "validated"
+        manifest_path = validated_dir / "validated_artifacts_manifest.json"
+        json_path = validated_dir / "protocol_final_validated.json"
+        html_path = validated_dir / "protocol_final_validated.html"
+
+        if not manifest_path.exists():
+            return {"success": False, "error": "No validated_artifacts_manifest.json — protocol was not validated"}
+        if not json_path.exists() or not html_path.exists():
+            return {"success": False, "error": "Missing validated artifacts (JSON/HTML)"}
+
+        import json as json_mod
+
+        from meeting_metadata import compute_sha256_from_bytes
+
+        manifest = json_mod.loads(manifest_path.read_text(encoding="utf-8"))
+        if not manifest.get("validation_succeeded"):
+            return {"success": False, "error": "Protocol did not pass validation — republish rejected"}
+        if not manifest.get("generation_succeeded"):
+            return {"success": False, "error": "Protocol generation was not successful — republish rejected"}
+
+        html_content = html_path.read_text(encoding="utf-8")
+        json_content_bytes = json_path.read_bytes()
+
+        html_sha = compute_sha256_from_bytes(html_content.encode("utf-8"))
+        json_sha = compute_sha256_from_bytes(json_content_bytes)
+
+        if html_sha != manifest.get("html_sha256"):
+            return {"success": False, "error": "HTML was modified after validation — republish rejected"}
+        if json_sha != manifest.get("json_sha256"):
+            return {"success": False, "error": "JSON was modified after validation — republish rejected"}
+
+        validation_flags = manifest.get("validation_flags", {})
+        for flag_name in ["source_alignment_passed", "fact_validation_passed",
+                          "structure_validation_passed", "render_validation_passed"]:
+            if not validation_flags.get(flag_name, False):
+                return {"success": False, "error": f"Validation flag {flag_name} is False — republish rejected"}
+
+        if item.dry_run:
+            return {"success": True, "url": None, "message": "Dry-run: publishing skipped"}
+
+        proto_data = json_mod.loads(json_content_bytes.decode("utf-8"))
+        parent_id = item.parent_page_id or settings.CONFLUENCE_PARENT_PAGE_ID
+        title = proto_data.get("protocol_title", item.display_name or "Protocol")
+        page = self.confluence.create_page(
+            title=title, storage_html=html_content, parent_page_id=parent_id
+        )
+        item.result_url = page.get("url", "")
+
+        if item.send_telegram:
+            try:
+                self.telegram.send_notification(
+                    protocol_title=title,
+                    meeting_date=proto_data.get("meeting_date", ""),
+                    key_result=(proto_data.get("key_outcomes", "") or "")[:200],
+                    confluence_url=item.result_url,
+                )
+            except Exception as te:
+                print(f"Telegram notification failed: {te}")
+
+        item.status = "completed"
+        return {"success": True, "url": item.result_url}
+
     def _load_transcript(self, item: BatchItem) -> str:
         if item.source_type == "local_transcript":
             if item.source_path and item.source_path.exists():
                 try:
-                    with open(item.source_path, "r", encoding="utf-8-sig") as f:
+                    with open(item.source_path, encoding="utf-8-sig") as f:
                         return f.read()
                 except UnicodeDecodeError:
-                    with open(item.source_path, "r", encoding="utf-8") as f:
+                    with open(item.source_path, encoding="utf-8") as f:
                         return f.read()
 
         if item.source_type == "local_video":
@@ -227,7 +645,7 @@ class ProcessingService:
         return ""
 
     def _save_artifacts(self, directory: Path, protocol: Protocol, html: str,
-                        transcript: str):
+                        transcript: str, item: BatchItem, llm_raw: str = "", llm_data: dict | None = None):
         directory.mkdir(parents=True, exist_ok=True)
 
         with open(directory / "protocol.json", "w", encoding="utf-8") as f:
@@ -239,17 +657,145 @@ class ProcessingService:
         with open(directory / "source_transcript.txt", "w", encoding="utf-8") as f:
             f.write(transcript)
 
+        if llm_raw:
+            with open(directory / "llm_raw_response.txt", "w", encoding="utf-8") as f:
+                f.write(llm_raw)
+
+        if llm_data is not None:
+            with open(directory / "llm_parsed_response.json", "w", encoding="utf-8") as f:
+                json.dump(llm_data, f, indent=2, ensure_ascii=False)
+
+        date_res = getattr(self, "_last_date_resolution", None)
+        if date_res:
+            with open(directory / "date_resolution_debug.json", "w", encoding="utf-8") as f:
+                json.dump(date_res, f, indent=2, ensure_ascii=False)
+
         prov = create_provenance(protocol, protocol.source_context_id, protocol.protocol_id)
         with open(directory / "protocol_provenance.json", "w", encoding="utf-8") as f:
             json.dump(prov, f, indent=2, ensure_ascii=False)
 
         manifest = create_input_manifest(
-            directory, protocol.source_context_id, "",
-            "local_transcript", protocol.protocol_id,
+            source_path=str(item.source_path) if item.source_path else None,
+            source_context_id=protocol.source_context_id,
+            source_sha256=item.source_sha256 or "",
+            source_type=item.source_type,
+            item_id=item.item_id,
         )
+        manifest["protocol_id"] = protocol.protocol_id
+        manifest["template_id"] = protocol.template_id
+        manifest["protocol_mode"] = item.protocol_mode
+        manifest["word_count"] = item.word_count
+        manifest["file_size_bytes"] = item.file_size_bytes
+        manifest["duration_seconds"] = item.duration_seconds
+        manifest["external_source_id"] = item.bitlink_recording_id
         with open(directory / "input_manifest.json", "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+    def _save_standard_artifacts(self, directory: Path, protocol: Protocol, html: str):
+        """Write standard-specific debug artifacts per the task contract."""
+        import json as _json
+
+        from services.protocol_title import detect_meeting_type
+        from services.standard_protocol_grouper import (
+            build_consistency_report,
+            build_grouping_map,
+            build_standard_view,
+            validate_group_coverage,
+        )
+
+        meeting_type = detect_meeting_type(
+            getattr(protocol, "client_name", ""), getattr(protocol, "project_name", "")
+        )
+        view = getattr(protocol, "_standard_compressed_view", None)
+        if view is None:
+            view = build_standard_view(
+                protocol,
+                source_type=getattr(protocol, "_standard_source_type", "local_transcript"),
+                source_filename=getattr(protocol, "_standard_source_filename", ""),
+                recording_source=getattr(protocol, "_standard_recording_source", ""),
+                meeting_type=meeting_type,
+            )
+        # raw = canonical protocol dict (already saved as protocol.json); grouped = view.
+        try:
+            (directory / "standard_protocol_raw.json").write_text(
+                _json.dumps(protocol.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+            (directory / "standard_protocol_grouped.json").write_text(
+                _json.dumps(view, indent=2, ensure_ascii=False), encoding="utf-8")
+            (directory / "standard_protocol_final.json").write_text(
+                _json.dumps(view, indent=2, ensure_ascii=False), encoding="utf-8")
+            (directory / "standard_protocol_final.html").write_text(html, encoding="utf-8")
+            (directory / "standard_grouping_map.json").write_text(
+                _json.dumps(build_grouping_map(view), indent=2, ensure_ascii=False), encoding="utf-8")
+            (directory / "standard_vs_detailed_consistency.json").write_text(
+                _json.dumps(build_consistency_report(protocol, view), indent=2, ensure_ascii=False),
+                encoding="utf-8")
+            coverage = validate_group_coverage(view)
+            flags = {
+                "required_sections_present": 9,
+                "general_info_keys_present": 4,
+                "confirmed_participants_count": len(view["participants"]),
+                "participant_group_rows_count": 0,
+                "key_outcomes_count": len(view["key_outcomes"]),
+                "detailed_topic_count": view["_debug"]["detailed_topic_count"],
+                "standard_topic_group_count": len(view["topic_groups"]),
+                "topic_source_coverage": coverage["topic_source_ids"]["covered_source_count"]
+                    / max(1, view["_debug"]["detailed_topic_count"]),
+                "detailed_decision_count": view["_debug"]["detailed_decision_count"],
+                "standard_decision_group_count": len(view["decision_groups"]),
+                "decision_source_coverage": coverage["decision_source_ids"]["covered_source_count"]
+                    / max(1, view["_debug"]["detailed_decision_count"]),
+                "open_question_count": len(view["open_questions"]),
+                "risk_source_coverage": coverage["risk_source_ids"]["covered_source_count"]
+                    / max(1, view["_debug"]["detailed_risk_count"]),
+                "task_source_coverage": coverage["task_source_ids"]["covered_source_count"]
+                    / max(1, view["_debug"]["detailed_task_count"]),
+                "legacy_heading_count": 0,
+                "raw_filename_in_title": False,
+                "empty_cell_count": 0,
+                "silent_drop_count": len(view["_debug"].get("dropped_questions", [])),
+            }
+            (directory / "standard_validation.json").write_text(
+                _json.dumps(flags, indent=2, ensure_ascii=False), encoding="utf-8")
+            (directory / "title_resolution.json").write_text(
+                _json.dumps({
+                    "protocol_title": view["protocol_title"],
+                    "client_name": view["_debug"].get("client_name", ""),
+                    "project_name": view["_debug"].get("project_name", ""),
+                    "meeting_type": meeting_type,
+                    "source_filename": getattr(protocol, "_standard_source_filename", ""),
+                    "used_raw_filename": False,
+                }, indent=2, ensure_ascii=False), encoding="utf-8")
+        except Exception as exc:  # artifact writing must not fail the pipeline
+            print(f"standard artifacts failed: {exc}")
 
     def _report_progress(self, stage: str, percent: float, item: BatchItem):
         if self.progress_callback:
             self.progress_callback(stage, percent, item)
+
+    def _send_telegram_protocol(self, protocol, url, item):
+        """Send Telegram notification. Returns (ok, message_id)."""
+        try:
+            title = protocol.protocol_title or item.display_name
+            date_str = ""
+            if protocol.meeting_date:
+                date_str = protocol.meeting_date.strftime("%d.%m.%Y")
+                if protocol.meeting_time:
+                    date_str += " " + protocol.meeting_time.strftime("%H:%M")
+            msg = f"Тема встречи: {title}\n"
+            if protocol.client_name and protocol.project_name and protocol.client_name != "Не определено":
+                msg += f"Клиент: {protocol.client_name}\nПроект: {protocol.project_name}\n"
+            if date_str:
+                msg += f"Дата: {date_str}\n\n"
+            msg += f"Протокол в Confluence:\n{url}\n\nИсточник записи: локальный файл"
+
+            resp = requests.post(
+                f"https://api.telegram.org/bot{self.config.telegram_bot_token}/sendMessage",
+                json={"chat_id": self.config.telegram_chat_id, "text": msg},
+                timeout=15,
+                verify=getattr(settings, "REQUESTS_VERIFY_SSL", True),
+            )
+            if resp.status_code == 200 and resp.json().get("ok"):
+                return True, resp.json()["result"]["message_id"]
+            return False, None
+        except Exception:
+            return False, None

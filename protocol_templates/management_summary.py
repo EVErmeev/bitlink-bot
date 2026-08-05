@@ -1,9 +1,20 @@
+import html as html_mod
+import json
 import re
+import uuid
 from datetime import date
 
-from protocol_templates.base import BaseProtocolTemplate
-from models.protocol import Protocol, TopicBlock, DecisionItem, QuestionItem, RiskItem, TaskItem
+from models.protocol import (
+    AtomicItem,
+    DecisionItem,
+    Protocol,
+    QuestionItem,
+    RiskItem,
+    TaskItem,
+)
 from models.validation import ValidationReport, ValidationStatus
+from protocol_templates.base import BaseProtocolTemplate
+from services.protocol_content_utils import normalize_text_list
 
 
 class ManagementSummaryTemplate(BaseProtocolTemplate):
@@ -75,7 +86,355 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
             "- Пиши на русском языке."
         )
 
+    # ── Helper ───────────────────────────────────────────────────────────
+
+    def _is_template_text(self, llm_output: str) -> bool:
+        """Check if llm_output is a mock/template placeholder, not real content."""
+        if not llm_output or not llm_output.strip():
+            return True
+        lower = llm_output.lower()
+        mock_markers = [
+            "placeholder", "todo", "template", "tbd", "fill me", "заполните",
+            "{{", "}}", "mock", "mock_mode",
+        ]
+        return any(m in lower for m in mock_markers)
+
+    def _extract_summary_from_llm(self, llm_output: str) -> str | None:
+        """Try to extract the management_summary section from LLM output."""
+        if not llm_output or self._is_template_text(llm_output):
+            return None
+
+        patterns = [
+            r"(?:Управленческое резюме|Резюме|Management Summary)[\s:]*\n(.+?)(?:\n#|\n\*\*|\Z)",
+            r"#+\s*Резюме\s*\n(.+?)(?:\n#|\Z)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, llm_output, re.DOTALL | re.IGNORECASE)
+            if match:
+                text = match.group(1).strip()
+                if len(text) > 100:
+                    return text
+
+        first_paras = []
+        for block in llm_output.split("\n\n"):
+            stripped = block.strip()
+            if stripped and not stripped.startswith("#") and len(stripped) > 80:
+                first_paras.append(stripped)
+            if len(first_paras) >= 3:
+                break
+
+        if first_paras:
+            combined = "\n\n".join(first_paras)
+            if len(combined) > 200:
+                return combined
+
+        return None
+
+    def _build_summary(self, facts: list[AtomicItem], decisions: list[DecisionItem],
+                       questions: list[QuestionItem], risks: list[RiskItem],
+                       tasks: list[TaskItem], participants: list[dict],
+                       purpose: str, llm_output: str | None = None) -> str:
+        """Build a management summary from atomic items."""
+        llm_extracted = None
+        if llm_output:
+            llm_extracted = self._extract_summary_from_llm(llm_output)
+
+        if llm_extracted:
+            return llm_extracted
+
+        paragraphs = []
+
+        # Paragraph 1: context and purpose
+        para1_parts = []
+        if purpose:
+            para1_parts.append(f"Цель встречи: {purpose}.")
+        if participants:
+            names = [p.get("name", "") for p in participants if isinstance(p, dict) and p.get("name")]
+            if names:
+                para1_parts.append(f"Участники: {', '.join(names)}.")
+
+        if para1_parts:
+            paragraphs.append(" ".join(para1_parts))
+
+        # Paragraph 2: what was discussed (from facts)
+        if facts:
+            fact_summaries = []
+            for f in facts[:5]:
+                short = f.text[:200].rstrip(".").strip()
+                if short:
+                    fact_summaries.append(f"- {short}")
+            if fact_summaries:
+                para2 = "В ходе встречи были рассмотрены следующие вопросы:\n" + "\n".join(fact_summaries)
+                if len(facts) > 5:
+                    para2 += f"\nВсего зафиксировано {len(facts)} фактов."
+                paragraphs.append(para2)
+        else:
+            paragraphs.append("Обсуждение прошло без фиксации фактов в стенограмме.")
+
+        # Paragraph 3: decisions and outcomes
+        if decisions:
+            dec_texts = [f"- {d.decision_text[:200]}" for d in decisions[:5]]
+            para3 = "Приняты следующие решения:\n" + "\n".join(dec_texts)
+            paragraphs.append(para3)
+
+        if questions:
+            q_texts = [f"- {q.question_text[:200]}" for q in questions[:5]]
+            para_q = "Остаются открытыми вопросы:\n" + "\n".join(q_texts)
+            paragraphs.append(para_q)
+
+        if risks:
+            r_texts = [f"- {r.risk_text[:200]}" for r in risks[:5]]
+            para_r = "Выявлены риски, требующие внимания руководства:\n" + "\n".join(r_texts)
+            paragraphs.append(para_r)
+
+        if tasks:
+            t_texts = [f"- {t.task_text[:200]}" for t in tasks[:5]]
+            para_t = "Поставлены задачи:\n" + "\n".join(t_texts)
+            paragraphs.append(para_t)
+
+        if not paragraphs:
+            return "Встреча проведена. Материалы зафиксированы. Детальная информация — в приложениях."
+
+        return "\n\n".join(paragraphs)
+
+    def _build_control_points(self, decisions: list[DecisionItem],
+                               tasks: list[TaskItem],
+                               meeting_date) -> str:
+        """Build control points text from decisions and tasks."""
+        points = []
+
+        if meeting_date and isinstance(meeting_date, date):
+            points.append(f"Дата встречи: {meeting_date.isoformat()} — точка отсчёта.")
+
+        for i, d in enumerate(decisions[:3], 1):
+            deadline = d.deadline if d.deadline and d.deadline != "Срок не определён" else "Требует уточнения"
+            points.append(f"{i}. Контроль исполнения решения «{d.decision_text[:80]}» — срок: {deadline}.")
+
+        for i, t in enumerate(tasks[:3], len(points) + 1):
+            deadline = t.deadline if t.deadline and t.deadline != "Срок не определён" else "Требует уточнения"
+            points.append(f"{i}. Контроль задачи «{t.task_text[:80]}» — срок: {deadline}.")
+
+        if not points:
+            return "Контрольные точки не определены. Рекомендуется назначить следующую встречу для контроля исполнения."
+
+        return "\n".join(points)
+
+    # ── assemble ─────────────────────────────────────────────────────────
+
     def assemble(self, protocol: Protocol, atomic_items: list, meeting_metadata: dict) -> Protocol:
+        protocol.template_id = self.template_id
+        protocol.atomic_items = atomic_items
+
+        # --- metadata ---
+        if meeting_metadata:
+            if "date" in meeting_metadata and not protocol.meeting_date:
+                raw_date = meeting_metadata["date"]
+                if isinstance(raw_date, str):
+                    try:
+                        protocol.meeting_date = date.fromisoformat(raw_date)
+                    except ValueError:
+                        pass
+                elif isinstance(raw_date, date):
+                    protocol.meeting_date = raw_date
+
+            protocol.protocol_title = meeting_metadata.get("title", protocol.protocol_title)
+            protocol.meeting_purpose = meeting_metadata.get("purpose", protocol.meeting_purpose)
+
+            if "participants" in meeting_metadata:
+                protocol.participants = meeting_metadata["participants"]
+
+        # --- classify items ---
+        facts = []
+        for item in atomic_items:
+            if not isinstance(item, AtomicItem):
+                continue
+
+            if item.item_type == "решение" and item.explicit_agreement and item.confidence >= 0.7:
+                decision = DecisionItem(
+                    decision_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    decision_text=item.text,
+                    context_and_basis="На основании обсуждения на встрече",
+                    agreed_scope="Объём согласован в ходе встречи",
+                    boundaries="Границы определены контекстом обсуждения",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    related_topic="",
+                    order=len(protocol.decisions) + 1,
+                    explicit_agreement=item.explicit_agreement,
+                    confidence=item.confidence,
+                    evidence=item.evidence,
+                )
+                protocol.decisions.append(decision)
+
+            elif item.item_type == "вопрос":
+                question = QuestionItem(
+                    question_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    question_text=item.text,
+                    context="Вопрос поднят в ходе встречи",
+                    known_info="Информация уточняется",
+                    to_determine="Требуется уточнение",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    next_action="Запросить информацию",
+                    status="открыт",
+                    related_topic="",
+                    order=len(protocol.questions) + 1,
+                )
+                protocol.questions.append(question)
+
+            elif item.item_type in ("риск", "ограничение", "зависимость"):
+                risk_type_map = {
+                    "риск": "Риск",
+                    "ограничение": "Ограничение",
+                    "зависимость": "Зависимость",
+                }
+                risk = RiskItem(
+                    risk_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    risk_type=risk_type_map.get(item.item_type, "Риск"),
+                    risk_text=item.text,
+                    reason="Выявлено в ходе встречи",
+                    impact="Требует оценки",
+                    trigger_condition="Условия не определены",
+                    measures="Меры не определены",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    status="актуален",
+                    related_topic="",
+                    order=len(protocol.risks) + 1,
+                )
+                protocol.risks.append(risk)
+
+            elif item.item_type == "задача" and item.commitment_confirmed:
+                task = TaskItem(
+                    task_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    task_text=item.text,
+                    basis="Поставлена в ходе встречи",
+                    expected_result="Результат будет определён при уточнении",
+                    responsible="Ответственный не определён",
+                    co_executors="",
+                    deadline="Срок не определён",
+                    dependencies="Зависимости не указаны",
+                    status="новая",
+                    related_topic="",
+                    order=len(protocol.tasks) + 1,
+                    commitment_confirmed=item.commitment_confirmed,
+                )
+                protocol.tasks.append(task)
+
+            elif item.item_type == "факт":
+                facts.append(item)
+
+        # --- fill management summary ---
+        protocol.management_summary = self._build_summary(
+            facts, protocol.decisions, protocol.questions,
+            protocol.risks, protocol.tasks, protocol.participants,
+            protocol.meeting_purpose,
+        )
+
+        # --- fill control points ---
+        protocol.control_points = self._build_control_points(
+            protocol.decisions, protocol.tasks, protocol.meeting_date,
+        )
+
+        # --- key outcomes ---
+        outcome_parts = []
+        if protocol.decisions:
+            outcome_parts.append(f"Принято {len(protocol.decisions)} решений.")
+        if protocol.questions:
+            outcome_parts.append(f"Зафиксировано {len(protocol.questions)} открытых вопросов.")
+        if protocol.risks:
+            outcome_parts.append(f"Выявлено {len(protocol.risks)} рисков/ограничений.")
+        if protocol.tasks:
+            outcome_parts.append(f"Поставлено {len(protocol.tasks)} задач.")
+
+        if outcome_parts:
+            protocol.key_outcomes = " ".join(outcome_parts)
+        else:
+            protocol.key_outcomes = "Встреча проведена. Итоги зафиксированы."
+
+        return protocol
+
+    # ── assemble_from_llm_json ───────────────────────────────────────────
+
+    def assemble_from_llm_json(self, protocol: Protocol, atomic_items: list,
+                                llm_data: dict, meeting_metadata: dict) -> Protocol:
+        gi = llm_data.get("general_info", {})
+        if gi.get("protocol_title"): protocol.protocol_title = gi["protocol_title"]
+
+        es = llm_data.get("executive_summary", {})
+        protocol.management_summary = es.get("summary", llm_data.get("summary", ""))
+
+        kr = llm_data.get("key_results", [])
+        if kr:
+            if isinstance(kr, list):
+                outcome_items = []
+                for item in kr:
+                    if isinstance(item, dict):
+                        outcome_items.append(item.get("text", item.get("result", str(item))))
+                    elif isinstance(item, str):
+                        outcome_items.append(item)
+                protocol.key_outcomes = "\n".join(outcome_items) if outcome_items else json.dumps(kr, ensure_ascii=False)
+            else:
+                protocol.key_outcomes = str(kr)
+
+        for d in llm_data.get("decisions", []):
+            if isinstance(d, dict):
+                protocol.decisions.append(DecisionItem(
+                    decision_id=str(uuid.uuid4())[:8], source_context_id=protocol.source_context_id,
+                    decision_text=d.get("decision_text", d.get("text", d.get("decision", ""))),
+                    responsible=d.get("responsible", ""), deadline=d.get("deadline", ""),
+                    explicit_agreement=d.get("explicit_agreement", False),
+                    confidence=d.get("confidence", 0.5),
+                    evidence=d.get("evidence", ""),
+                ))
+
+        for r in llm_data.get("risks_and_blockers", llm_data.get("critical_gaps_and_risks", [])):
+            if isinstance(r, dict):
+                protocol.risks.append(RiskItem(
+                    risk_id=str(uuid.uuid4())[:8], source_context_id=protocol.source_context_id,
+                    risk_text=r.get("risk_text", r.get("text", r.get("description", ""))),
+                    risk_type=r.get("risk_type", r.get("type", "Риск")),
+                    status=r.get("status", ""), responsible=r.get("responsible", ""),
+                ))
+
+        for t in llm_data.get("tasks", llm_data.get("actions", [])):
+            if isinstance(t, dict):
+                protocol.tasks.append(TaskItem(
+                    task_id=str(uuid.uuid4())[:8], source_context_id=protocol.source_context_id,
+                    task_text=t.get("task_text", t.get("text", t.get("action", t.get("description", "")))),
+                    responsible=t.get("responsible", ""), deadline=t.get("deadline", ""),
+                    commitment_confirmed=t.get("commitment_confirmed", False),
+                ))
+
+        cp = llm_data.get("control_points", llm_data.get("next_control_points", []))
+        if cp:
+            if isinstance(cp, list):
+                cp_items = []
+                for i, item in enumerate(cp, 1):
+                    if isinstance(item, dict):
+                        label = item.get("label", item.get("point", item.get("name", str(item))))
+                        date_val = item.get("date", item.get("deadline", ""))
+                        if date_val:
+                            cp_items.append(f"{i}. {label} — {date_val}")
+                        else:
+                            cp_items.append(f"{i}. {label}")
+                    elif isinstance(item, str):
+                        cp_items.append(f"{i}. {item}")
+                protocol.control_points = "\n".join(cp_items) if cp_items else str(cp)
+            else:
+                protocol.control_points = str(cp)
+
+        return protocol
+
+    # ── assemble_with_llm_output ─────────────────────────────────────────
+
+    def assemble_with_llm_output(self, protocol: Protocol, atomic_items: list,
+                                  llm_output: str, meeting_metadata: dict) -> Protocol:
+        """Use LLM output for summary; fall back to assembling from atomic_items."""
         protocol.template_id = self.template_id
         protocol.atomic_items = atomic_items
 
@@ -96,7 +455,118 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
             if "participants" in meeting_metadata:
                 protocol.participants = meeting_metadata["participants"]
 
+        facts = []
+        for item in atomic_items:
+            if not isinstance(item, AtomicItem):
+                continue
+
+            if item.item_type == "решение" and item.explicit_agreement and item.confidence >= 0.7:
+                decision = DecisionItem(
+                    decision_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    decision_text=item.text,
+                    context_and_basis="На основании обсуждения на встрече",
+                    agreed_scope="Объём согласован в ходе встречи",
+                    boundaries="Границы определены контекстом обсуждения",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    related_topic="",
+                    order=len(protocol.decisions) + 1,
+                    explicit_agreement=item.explicit_agreement,
+                    confidence=item.confidence,
+                    evidence=item.evidence,
+                )
+                protocol.decisions.append(decision)
+
+            elif item.item_type == "вопрос":
+                question = QuestionItem(
+                    question_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    question_text=item.text,
+                    context="Вопрос поднят в ходе встречи",
+                    known_info="Информация уточняется",
+                    to_determine="Требуется уточнение",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    next_action="Запросить информацию",
+                    status="открыт",
+                    related_topic="",
+                    order=len(protocol.questions) + 1,
+                )
+                protocol.questions.append(question)
+
+            elif item.item_type in ("риск", "ограничение", "зависимость"):
+                risk_type_map = {
+                    "риск": "Риск",
+                    "ограничение": "Ограничение",
+                    "зависимость": "Зависимость",
+                }
+                risk = RiskItem(
+                    risk_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    risk_type=risk_type_map.get(item.item_type, "Риск"),
+                    risk_text=item.text,
+                    reason="Выявлено в ходе встречи",
+                    impact="Требует оценки",
+                    trigger_condition="Условия не определены",
+                    measures="Меры не определены",
+                    responsible="Ответственный не определён",
+                    deadline="Срок не определён",
+                    status="актуален",
+                    related_topic="",
+                    order=len(protocol.risks) + 1,
+                )
+                protocol.risks.append(risk)
+
+            elif item.item_type == "задача" and item.commitment_confirmed:
+                task = TaskItem(
+                    task_id=item.item_id,
+                    source_context_id=item.source_context_id,
+                    task_text=item.text,
+                    basis="Поставлена в ходе встречи",
+                    expected_result="Результат будет определён при уточнении",
+                    responsible="Ответственный не определён",
+                    co_executors="",
+                    deadline="Срок не определён",
+                    dependencies="Зависимости не указаны",
+                    status="новая",
+                    related_topic="",
+                    order=len(protocol.tasks) + 1,
+                    commitment_confirmed=item.commitment_confirmed,
+                )
+                protocol.tasks.append(task)
+
+            elif item.item_type == "факт":
+                facts.append(item)
+
+        protocol.management_summary = self._build_summary(
+            facts, protocol.decisions, protocol.questions,
+            protocol.risks, protocol.tasks, protocol.participants,
+            protocol.meeting_purpose, llm_output,
+        )
+
+        protocol.control_points = self._build_control_points(
+            protocol.decisions, protocol.tasks, protocol.meeting_date,
+        )
+
+        outcome_parts = []
+        if protocol.decisions:
+            outcome_parts.append(f"Принято {len(protocol.decisions)} решений.")
+        if protocol.questions:
+            outcome_parts.append(f"Зафиксировано {len(protocol.questions)} открытых вопросов.")
+        if protocol.risks:
+            outcome_parts.append(f"Выявлено {len(protocol.risks)} рисков/ограничений.")
+        if protocol.tasks:
+            outcome_parts.append(f"Поставлено {len(protocol.tasks)} задач.")
+
+        if outcome_parts:
+            protocol.key_outcomes = " ".join(outcome_parts)
+        else:
+            protocol.key_outcomes = "Встреча проведена. Итоги зафиксированы."
+
         return protocol
+
+    # ── validation ───────────────────────────────────────────────────────
 
     def validate(self, protocol: Protocol) -> ValidationReport:
         report = ValidationReport()
@@ -185,6 +655,29 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
 
         return report
 
+    def _render_control_points_html(self, control_points_value) -> str:
+        """Render control points as a proper HTML list or table."""
+        if not control_points_value:
+            return '<p>—</p>'
+        items = normalize_text_list(control_points_value)
+        if not items:
+            return '<p>—</p>'
+        # Check if items have structured data (date fields)
+        has_dates = any("—" in item or ":" in item for item in items)
+        if has_dates:
+            html_out = '<ul>'
+            for item in items:
+                html_out += f'<li>{html_mod.escape(item)}</li>'
+            html_out += '</ul>'
+            return html_out
+        html_out = '<ol>'
+        for item in items:
+            html_out += f'<li>{html_mod.escape(item)}</li>'
+        html_out += '</ol>'
+        return html_out
+
+    # ── render_html ──────────────────────────────────────────────────────
+
     def render_html(self, protocol: Protocol) -> str:
         date_str = protocol.meeting_date.isoformat() if protocol.meeting_date else "—"
 
@@ -222,15 +715,18 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
         participants_list = ""
         if protocol.participants:
             participants_list = "<ul>" + "".join(
-                f"<li>{p.get('name', '—')} — {p.get('role', '—')}</li>"
+                "<li>{} — {}</li>".format(
+                    html_mod.escape(p.get('name', '—')),
+                    html_mod.escape(p.get('role') or p.get('position') or p.get('job_title') or '—'),
+                )
                 for p in protocol.participants
             ) + "</ul>"
 
         html = f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Управленческий протокол — {protocol.protocol_title or 'Встреча'}</title>
 <style>
     body {{
@@ -315,7 +811,7 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
 </div>
 
 <h2>{self.SECTION_NAMES['management_summary']}</h2>
-<div>{protocol.management_summary.replace(chr(10), '<br>') if protocol.management_summary else '<p>—</p>'}</div>
+<div>{protocol.management_summary.replace(chr(10), '<br/>') if protocol.management_summary else '<p>—</p>'}</div>
 
 <h2>{self.SECTION_NAMES['decisions_and_approaches']}</h2>
 <table>
@@ -364,7 +860,7 @@ class ManagementSummaryTemplate(BaseProtocolTemplate):
 </table>
 
 <h2>{self.SECTION_NAMES['control_points']}</h2>
-<div>{protocol.control_points.replace(chr(10), '<br>') if protocol.control_points else '<p>—</p>'}</div>
+{self._render_control_points_html(protocol.control_points)}
 
 <div class="footer">Протокол сгенерирован автоматически. Версия шаблона: {self.template_id} v{self.version}</div>
 </body>

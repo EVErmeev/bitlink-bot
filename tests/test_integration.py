@@ -2,16 +2,24 @@
 Integration test: generate sample protocols of all four types
 and verify key structural requirements.
 """
-import pytest
-import sys
 import json
-from pathlib import Path
+import sys
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.batch import BatchItem
-from models.protocol import Protocol, TopicBlock, DecisionItem, QuestionItem, RiskItem, TaskItem
+from models.protocol import (
+    DecisionItem,
+    Protocol,
+    QuestionItem,
+    RiskItem,
+    TaskItem,
+    TopicBlock,
+)
 from protocol_templates.registry import TemplateRegistry
 
 
@@ -32,7 +40,7 @@ def _make_base_protocol(template_id, ctx="sample_ctx"):
         "3. Запланированы задачи на следующий этап."
     )
     p.current_state = "Модуль интеграции разработан на 80%, требуется завершить тестирование API-контрактов."
-    
+
     discussion = (
         "Исходная ситуация: на момент встречи модуль интеграции находится в активной разработке. "
         "Текущее состояние: реализованы основные REST-эндпоинты, проведено юнит-тестирование. "
@@ -216,7 +224,7 @@ def _make_base_protocol(template_id, ctx="sample_ctx"):
             commitment_confirmed=True,
         ),
     ]
-    
+
     return p
 
 
@@ -293,7 +301,7 @@ class TestGenerateAllTemplates:
         )
         protocol.thematic_sections = [
             {
-                "title": "Архитектура интеграции", 
+                "title": "Архитектура интеграции",
                 "content": protocol.topic_blocks[0].discussion_content if protocol.topic_blocks else ""
             },
             {
@@ -423,31 +431,31 @@ class TestBatchProcessing:
     def test_sequential_processing(self):
         """Items should be processed one at a time (max_concurrency=1)."""
         from services.processing_service import ProcessingService
-        
+
         processed_order = []
-        
+
         def cb(stage, pct, item):
             if stage in ("completed", "failed"):
                 processed_order.append(item.item_id)
-        
+
         service = ProcessingService(progress_callback=cb)
-        
+
         item1 = BatchItem(source_type="unknown", display_name="item1")
         item2 = BatchItem(source_type="unknown", display_name="item2")
-        
+
         service.process_item(item1)
         service.process_item(item2)
-        
+
         # Sequential by design of process_item called one at a time
         assert len(processed_order) == 2
 
     def test_queue_recovery(self, tmp_path):
         """After crash, successful items should not be reprocessed."""
         from services.batch_service import BatchService
-        
+
         service = BatchService()
         service.create_batch()
-        
+
         items = [
             BatchItem(item_id="completed_1", status="completed", display_name="done"),
             BatchItem(item_id="failed_1", status="failed", display_name="failed"),
@@ -455,11 +463,11 @@ class TestBatchProcessing:
             BatchItem(item_id="processing_1", status="processing", display_name="processing"),
         ]
         service.add_items(items)
-        
+
         resumable = service.get_resumable_items()
         assert len(resumable) == 1  # only the "processing" item
         assert resumable[0]["display_name"] == "processing"
-        
+
         pending = service.get_pending_items()
         assert len(pending) == 1  # only "pending" item
         assert pending[0].display_name == "pending"

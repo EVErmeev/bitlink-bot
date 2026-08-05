@@ -1,5 +1,6 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import messagebox, ttk
+
 from services.confluence_service import ConfluenceClient
 
 

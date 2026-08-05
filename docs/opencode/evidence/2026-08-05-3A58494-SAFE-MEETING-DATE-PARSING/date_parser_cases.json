@@ -1,0 +1,149 @@
+[
+  {
+    "name": "2026_07_24_09_14_30_video.mp4",
+    "expected": [
+      "2026-07-24",
+      "09:14"
+    ],
+    "actual": [
+      "2026-07-24",
+      "09:14"
+    ],
+    "ok": true,
+    "diag": {
+      "meeting_date": "2026-07-24",
+      "meeting_time": "09:14",
+      "source": "filename",
+      "matched_format": "YYYY_MM_DD_HH_MM_SS",
+      "filename_basename": "2026_07_24_09_14_30_video.mp4",
+      "invalid_candidates_count": 0,
+      "fallback_used": false
+    }
+  },
+  {
+    "name": "2026_08_05_15_30_45_recording.mp4",
+    "expected": [
+      "2026-08-05",
+      "15:30"
+    ],
+    "actual": [
+      "2026-08-05",
+      "15:30"
+    ],
+    "ok": true,
+    "diag": {
+      "meeting_date": "2026-08-05",
+      "meeting_time": "15:30",
+      "source": "filename",
+      "matched_format": "YYYY_MM_DD_HH_MM_SS",
+      "filename_basename": "2026_08_05_15_30_45_recording.mp4",
+      "invalid_candidates_count": 0,
+      "fallback_used": false
+    }
+  },
+  {
+    "name": "31_07_26_14_06_05_recording.mp4",
+    "expected": [
+      "2026-07-31",
+      "14:06"
+    ],
+    "actual": [
+      "2026-07-31",
+      "14:06"
+    ],
+    "ok": true,
+    "diag": {
+      "meeting_date": "2026-07-31",
+      "meeting_time": "14:06",
+      "source": "filename",
+      "matched_format": "DD_MM_YY_HH_MM_SS",
+      "filename_basename": "31_07_26_14_06_05_recording.mp4",
+      "invalid_candidates_count": 0,
+      "fallback_used": false
+    }
+  },
+  {
+    "name": "31.07.2026_protocol.docx",
+    "expected": [
+      "2026-07-31",
+      null
+    ],
+    "actual": [
+      "2026-07-31",
+      null
+    ],
+    "ok": true,
+    "diag": {
+      "meeting_date": "2026-07-31",
+      "meeting_time": null,
+      "source": "filename",
+      "matched_format": "DD_MM_YYYY",
+      "filename_basename": "31.07.2026_protocol.docx",
+      "invalid_candidates_count": 0,
+      "fallback_used": false
+    }
+  },
+  {
+    "name": "31_07_2026_protocol.txt",
+    "expected": [
+      "2026-07-31",
+      null
+    ],
+    "actual": [
+      "2026-07-31",
+      null
+    ],
+    "ok": true,
+    "diag": {
+      "meeting_date": "2026-07-31",
+      "meeting_time": null,
+      "source": "filename",
+      "matched_format": "DD_MM_YYYY",
+      "filename_basename": "31_07_2026_protocol.txt",
+      "invalid_candidates_count": 0,
+      "fallback_used": false
+    }
+  },
+  {
+    "name": "2026-07-24-09-14-30.mp4",
+    "expected": [
+      "2026-07-24",
+      "09:14"
+    ],
+    "actual": [
+      "2026-07-24",
+      "09:14"
+    ],
+    "ok": true,
+    "diag": {
+      "meeting_date": "2026-07-24",
+      "meeting_time": "09:14",
+      "source": "filename",
+      "matched_format": "YYYY_MM_DD_HH_MM_SS",
+      "filename_basename": "2026-07-24-09-14-30.mp4",
+      "invalid_candidates_count": 0,
+      "fallback_used": false
+    }
+  },
+  {
+    "name": "2026.07.24.09.14.30.mp4",
+    "expected": [
+      "2026-07-24",
+      "09:14"
+    ],
+    "actual": [
+      "2026-07-24",
+      "09:14"
+    ],
+    "ok": true,
+    "diag": {
+      "meeting_date": "2026-07-24",
+      "meeting_time": "09:14",
+      "source": "filename",
+      "matched_format": "YYYY_MM_DD_HH_MM_SS",
+      "filename_basename": "2026.07.24.09.14.30.mp4",
+      "invalid_candidates_count": 0,
+      "fallback_used": false
+    }
+  }
+]

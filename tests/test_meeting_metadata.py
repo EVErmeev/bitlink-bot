@@ -1,10 +1,15 @@
-import pytest
 import sys
+from datetime import date, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from meeting_metadata import extract_date_from_filename, determine_meeting_date, compute_sha256, count_words
+from meeting_metadata import (
+    compute_sha256,
+    count_words,
+    determine_meeting_date,
+    extract_date_from_filename,
+)
 
 
 class TestDateExtraction:
@@ -58,6 +63,30 @@ class TestDateExtraction:
         assert d is not None
         assert t is not None
         assert d.year == 2026
+        assert d.month == 7
+        assert d.day == 24
+        assert t.hour == 9
+        assert t.minute == 14
+
+    def test_date_from_slash_format_with_seconds(self):
+        d, t = extract_date_from_filename(Path("2026_07_24_09_14_30_Название.mp4"))
+        assert d is not None
+        assert d.year == 2026
+        assert d.month == 7
+        assert d.day == 24
+        assert t is not None
+        assert t.hour == 9
+        assert t.minute == 14
+
+    def test_iso_with_seconds_not_parsed_as_dd_mm_yy(self):
+        d, t = extract_date_from_filename(Path("2026_07_24_09_14_30_video.mp4"))
+        assert d == date(2026, 7, 24)
+        assert t == time(9, 14)
+
+    def test_dd_mm_yy_with_time_is_supported(self):
+        d, t = extract_date_from_filename(Path("31_07_26_14_06_05_recording.mp4"))
+        assert d == date(2026, 7, 31)
+        assert t == time(14, 6)
 
     def test_time_not_set_to_midnight(self):
         d, t = extract_date_from_filename(Path("2026_07_24_Название.txt"))

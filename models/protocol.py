@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import date, time, datetime
-from typing import Optional
+from datetime import date, time
 
 
 @dataclass
@@ -33,6 +32,8 @@ class TopicBlock:
     status_deadline: str = ""
     order: int = 0
     word_count: int = 0
+    source_item_ids: list = field(default_factory=list)
+    evidence: list = field(default_factory=list)
 
 
 @dataclass
@@ -109,8 +110,8 @@ class Protocol:
     source_context_id: str
 
     # Section 1: General info
-    meeting_date: Optional[date] = None
-    meeting_time: Optional[time] = None
+    meeting_date: date | None = None
+    meeting_time: time | None = None
     protocol_title: str = ""
     meeting_purpose: str = ""
 
@@ -164,9 +165,15 @@ class Protocol:
     fact_validation_passed: bool = False
     structure_validation_passed: bool = False
     render_validation_passed: bool = False
+    topic_coverage_passed: bool = False
+    topic_alignment_passed: bool = False
 
     # Atomic items used to generate
     atomic_items: list[AtomicItem] = field(default_factory=list)
+
+    # Client/project context
+    client_name: str = ""
+    project_name: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -194,6 +201,8 @@ class Protocol:
                     "status_deadline": tb.status_deadline,
                     "order": tb.order,
                     "word_count": tb.word_count,
+                    "source_item_ids": tb.source_item_ids,
+                    "evidence": tb.evidence,
                 }
                 for tb in self.topic_blocks
             ],
@@ -287,6 +296,10 @@ class Protocol:
             "fact_validation_passed": self.fact_validation_passed,
             "structure_validation_passed": self.structure_validation_passed,
             "render_validation_passed": self.render_validation_passed,
+            "topic_coverage_passed": self.topic_coverage_passed,
+            "topic_alignment_passed": self.topic_alignment_passed,
+            "client_name": self.client_name,
+            "project_name": self.project_name,
         }
 
     @classmethod
@@ -325,6 +338,10 @@ class Protocol:
         p.fact_validation_passed = d.get("fact_validation_passed", False)
         p.structure_validation_passed = d.get("structure_validation_passed", False)
         p.render_validation_passed = d.get("render_validation_passed", False)
+        p.topic_coverage_passed = d.get("topic_coverage_passed", False)
+        p.topic_alignment_passed = d.get("topic_alignment_passed", False)
+        p.client_name = d.get("client_name", "")
+        p.project_name = d.get("project_name", "")
 
         for tb in d.get("topic_blocks", []):
             p.topic_blocks.append(TopicBlock(
@@ -340,6 +357,8 @@ class Protocol:
                 status_deadline=tb.get("status_deadline", ""),
                 order=tb.get("order", 0),
                 word_count=tb.get("word_count", 0),
+                source_item_ids=tb.get("source_item_ids", []),
+                evidence=tb.get("evidence", []),
             ))
         for dec in d.get("decisions", []):
             p.decisions.append(DecisionItem(

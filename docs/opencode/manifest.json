@@ -4,18 +4,240 @@
   "default_branch": "main",
   "audit_id": "AUDIT-2026-08-01-e7cc95f",
   "audit_file": "docs/opencode/audits/AUDIT-2026-08-01-e7cc95f.md",
-  "active_task_id": "TASK-2026-08-01-e7cc95f",
-  "active_task_file": "docs/opencode/tasks/TASK-2026-08-01-e7cc95f.md",
-  "base_commit": "e7cc95fb0d375614849351cdef131f896dcec137",
-  "head_commit": null,
+"active_task_id": "CHECKPOINT-2026-08-03",
+  "active_task_file": "docs/opencode/releases/CHECKPOINT-2026-08-03.md",
+  "base_commit": "903f355365514dd198c95fafd4f5f265100975e6",
+  "head_commit": "1da90bd79756d9e13c36f679d1df6aa3b6478a3a",
   "working_branch": "fix/audit-e7cc95f",
-  "pull_request_url": null,
-  "status": "changes_required",
-  "validation_state": "awaiting_fixes",
+  "pull_request_url": "https://github.com/EVErmeev/bitlink-bot/pull/1",
+  "status": "checkpoint",
+  "validation_state": "checkpoint_reached",
   "required_checks": [
     "python -m compileall .",
     "pytest -q",
     "ruff check .",
     "mypy ."
-  ]
+  ],
+  "issues": [
+    {
+      "id": "BB-CRIT-001",
+      "status": "FIXED",
+      "fix_commit": "e994358184148fa43841941f9e8f8e3e24fd16ad",
+      "changed_files": [
+        "services/bitlink_service.py",
+        "services/transcription_service.py",
+        "services/confluence_service.py",
+        "services/telegram_service.py",
+        ".env.example"
+      ],
+      "tests": ["tests/test_services.py"],
+      "executor_comment": "Все сервисы читают *_MOCK из settings. При *_MOCK=false и отсутствии конфига — ConfigurationError. При *_MOCK=false и наличии конфига — NotImplementedError (реальные API не подтверждены). TelegramClient реализует реальную отправку через requests. Mock по умолчанию = true."
+    },
+    {
+      "id": "BB-CRIT-002",
+      "status": "FIXED",
+      "fix_commit": "58453171148386ba0ed3631c04b6d864a2d4f7c2",
+      "changed_files": [
+        "services/llm_service.py",
+        "services/processing_service.py",
+        "settings.py",
+        ".env.example",
+        "protocol_templates/base.py"
+      ],
+      "tests": ["tests/test_services.py"],
+      "executor_comment": "Создан LLMClient с OpenAI-совместимым API. Конфигурируется через LLM_MOCK/LLM_API_URL/LLM_API_KEY/LLM_MODEL. ProcessingService вызывает LLM для генерации протокола из system_prompt шаблона + транскрипта. Mock возвращает учебный шаблон."
+    },
+    {
+      "id": "BB-CRIT-003",
+      "status": "FIXED",
+      "fix_commit": "7dae55b00b2f698c70fcc7a2e097bdc8f8a6653d",
+      "changed_files": [
+        "protocol_templates/project_detailed.py",
+        "protocol_templates/management_summary.py",
+        "protocol_templates/project_standard.py",
+        "protocol_templates/business_process_discovery.py"
+      ],
+      "tests": ["tests/test_templates.py", "tests/test_integration.py"],
+      "executor_comment": "Реализована кластеризация фактов в project_detailed (_cluster_facts по общим ключевым словам). Все 4 шаблона заполняют контент из atomic items. Добавлен assemble_with_llm_output для интеграции с LLM."
+    },
+    {
+      "id": "BB-CRIT-004",
+      "status": "FIXED",
+      "fix_commit": "7dae55b00b2f698c70fcc7a2e097bdc8f8a6653d",
+      "changed_files": [
+        "protocol_templates/management_summary.py",
+        "protocol_templates/project_standard.py",
+        "protocol_templates/business_process_discovery.py"
+      ],
+      "tests": ["tests/test_integration.py"],
+      "executor_comment": "Все 3 не-detailed шаблона заполняют свои специфические поля: management_summary — резюме и control_points, project_standard — все 12 секций, business_process_discovery — AS-IS, роли, системы, проблемы, требования."
+    },
+    {
+      "id": "BB-CRIT-005",
+      "status": "FIXED",
+      "fix_commit": "91fd494743470f9cb403ff85b7efecc63c0a01f0",
+      "changed_files": ["services/processing_service.py"],
+      "tests": ["tests/test_services.py"],
+      "executor_comment": "Статусы разделены: completed (успешная публикация), validation_failed (провал валидации), failed (ошибка). dry_run даёт completed с пометкой о пропуске публикации."
+    },
+    {
+      "id": "BB-CRIT-006",
+      "status": "FIXED",
+      "fix_commit": "91fd494743470f9cb403ff85b7efecc63c0a01f0",
+      "changed_files": ["services/processing_service.py"],
+      "tests": ["tests/test_validation.py"],
+      "executor_comment": "После apply_corrections() выполняется повторная валидация фактов (post_correction_fact_report), source_alignment и structure_validation. Все три проверки используют результаты ПОСЛЕ коррекций."
+    },
+    {
+      "id": "BB-CRIT-007",
+      "status": "FIXED",
+      "fix_commit": "91fd494743470f9cb403ff85b7efecc63c0a01f0",
+      "changed_files": ["services/source_isolation.py", "services/processing_service.py"],
+      "tests": ["tests/test_source_isolation.py"],
+      "executor_comment": "generate_source_context_id принимает source_sha256 как первичный seed. processing_service вычисляет SHA-256 контента транскрипта и передаёт его. Одинаковый контент → одинаковый source_context_id."
+    },
+    {
+      "id": "BB-CRIT-008",
+      "status": "FIXED",
+      "fix_commit": "91fd494743470f9cb403ff85b7efecc63c0a01f0",
+      "changed_files": ["models/batch.py", "services/processing_service.py", "cli.py"],
+      "tests": [],
+      "executor_comment": "Добавлен dry_run в BatchItem. processing_service проверяет флаг перед публикацией. CLI передаёт --dry-run. Dry-run: полный конвейер + валидация, но без Confluence и Telegram."
+    },
+    {
+      "id": "BB-CRIT-009",
+      "status": "FIXED",
+      "fix_commit": "91fd494743470f9cb403ff85b7efecc63c0a01f0",
+      "changed_files": ["app.py", "cli.py", "services/batch_service.py"],
+      "tests": [],
+      "executor_comment": "app.py при старте проверяет batch_state.json и показывает диалог восстановления. CLI поддерживает --resume. QueueController использует загруженное состояние."
+    },
+    {
+      "id": "BB-CRIT-010",
+      "status": "FIXED",
+      "fix_commit": "91fd494743470f9cb403ff85b7efecc63c0a01f0",
+      "changed_files": ["services/processing_service.py", "ui/result_frame.py"],
+      "tests": [],
+      "executor_comment": "Реализован republish() в ProcessingService: читает protocol.json и protocol_preview.html из debug-каталога, публикует без вызова LLM/транскрибации/валидации. result_frame вызывает republish для выбранного элемента."
+    },
+    {
+      "id": "BB-MAJ-011",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-012",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-013",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-014",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-015",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-016",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-017",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-018",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-019",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    },
+    {
+      "id": "BB-MAJ-020",
+      "status": "OPEN",
+      "fix_commit": null,
+      "changed_files": [],
+      "tests": [],
+      "executor_comment": ""
+    }
+  ],
+  "test_results": {
+    "compileall": {"command": "python -m compileall .", "exit_code": 0, "result": "PASS"},
+    "json_tool": {"command": "python -m json.tool docs/opencode/manifest.json", "exit_code": 0, "result": "PASS"},
+    "pytest": {"command": "pytest -q", "exit_code": 0, "passed": 168, "failed": 0, "skipped": 0, "result": "168 passed, 0 failed"},
+    "ruff": {"command": "ruff check .", "exit_code": 0, "result": "All checks passed"},
+    "mypy": {"command": "mypy . --ignore-missing-imports", "exit_code": 0, "result": "Success: no issues found in 43 source files"}
+  },
+  "changed_files": [
+    "services/llm_service.py",
+    "services/topic_coverage.py",
+    "services/source_isolation.py",
+    "services/processing_service.py",
+    "models/protocol.py",
+    "tests/test_llm_json.py",
+    "tests/test_topic_coverage.py",
+    "tests/test_critical_fixes.py",
+    "tests/test_post_correction.py",
+    "tests/test_source_isolation.py",
+    "docs/opencode/manifest.json",
+    "docs/opencode/validations/VALIDATION-2026-08-01-704e99b.md",
+    "docs/opencode/tasks/TASK-2026-08-01-704e99b.md",
+    ".github/workflows/ci.yml",
+    "requirements.txt"
+  ],
+  "remaining_blockers": [
+    "BB-CRIT-001: real adapters not implemented (API contracts unconfirmed)",
+    "BB-MAJ-011: ETA history not persisted",
+    "BB-MAJ-012: BIT.Link recording date not used",
+    "BB-MAJ-013: default template settings ignored",
+    "BB-MAJ-014: user text not HTML-escaped",
+    "BB-MAJ-015: tests confirm mock, not end-to-end",
+    "BB-MAJ-016: watch mode is a stub",
+    "BB-MAJ-017: no batch report and idempotency",
+    "BB-MAJ-018: Telegram doesn't use real settings",
+    "BB-MAJ-019: real Confluence publish not implemented",
+    "BB-MAJ-020: queue stop is incomplete"
+  ],
+  "next_action": "Await independent validation. Do NOT merge. Do NOT set accepted. Smoke page: https://art-conf.spbco.1cbit.ru/pages/viewpage.action?pageId=213352588",
+  "updated_at": "2026-08-01T21:55:00Z"
 }

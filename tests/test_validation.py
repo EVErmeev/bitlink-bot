@@ -1,16 +1,26 @@
-import pytest
 import sys
-from pathlib import Path
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from models.protocol import (
-    Protocol, TopicBlock, DecisionItem, QuestionItem, RiskItem, TaskItem
+    DecisionItem,
+    Protocol,
+    QuestionItem,
+    RiskItem,
+    TaskItem,
+    TopicBlock,
 )
 from models.validation import ValidationReport, ValidationStatus
-from services.fact_validation import validate_facts, apply_corrections, check_empty_cells
-from services.protocol_validation import validate_structure, validate_protocol_complete
+from services.fact_validation import (
+    apply_corrections,
+    check_empty_cells,
+    validate_facts,
+)
+from services.protocol_validation import validate_protocol_complete, validate_structure
 from services.render_validation import validate_html_render
 
 
@@ -55,10 +65,10 @@ class TestFactValidation:
         p.topic_blocks = [
             TopicBlock(
                 topic_id="t1", title="Тема 1", source_context_id=ctx,
-                discussion_content="Обсуждение темы 1 с деталями. Обсуждались риски и сроки.", 
-                conclusion="Итог обсуждения первой темы.", 
+                discussion_content="Обсуждение темы 1 с деталями. Обсуждались риски и сроки.",
+                conclusion="Итог обсуждения первой темы.",
                 status_text="В работе",
-                status_reason="Ожидание данных", 
+                status_reason="Ожидание данных",
                 status_next_action="Получить данные",
                 status_responsible="Иванов",
                 status_deadline="30.07.2026",
@@ -69,7 +79,7 @@ class TestFactValidation:
             DecisionItem(
                 decision_id="d1", source_context_id=ctx,
                 decision_text="Решение 1",
-                context_and_basis="Основание решения", 
+                context_and_basis="Основание решения",
                 agreed_scope="Область согласования",
                 boundaries="Границы решения",
                 responsible="Иванов",
@@ -176,7 +186,7 @@ class TestStructureValidation:
             TopicBlock(
                 topic_id="t1", title="Тема", source_context_id=ctx,
                 discussion_content="Обсуждался вопрос интеграции систем. Текущий статус — разработка. Были выявлены риски.",
-                conclusion="Подтверждена необходимость тестирования.", 
+                conclusion="Подтверждена необходимость тестирования.",
                 status_text="В работе",
                 order=1, word_count=8,
             ),
@@ -249,7 +259,7 @@ class TestRenderValidation:
         html = "not valid html <"
         from protocol_templates.registry import TemplateRegistry
         registry = TemplateRegistry()
-        template = registry.get("management_summary")
+        _ = registry.get("management_summary")
         ctx = "ctx"
         p = Protocol(protocol_id="p1", template_id="management_summary", source_context_id=ctx)
         p.meeting_date = date(2026, 7, 24)
