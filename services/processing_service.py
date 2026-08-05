@@ -92,9 +92,16 @@ class ProcessingService:
                 item.source_sha256 = compute_sha256_from_bytes(transcript_text.encode("utf-8"))
 
             self._report_progress("extracting_metadata", 15, item)
+            from meeting_metadata import diagnose_date_resolution
             meeting_date, meeting_time = determine_meeting_date(
                 filepath=item.source_path,
             )
+            date_resolution = diagnose_date_resolution(item.source_path)
+            self._last_date_resolution = date_resolution
+            if meeting_date is None:
+                item.status_message = (
+                    item.status_message or ""
+                ) + "Дата встречи не определена автоматически. Обработка продолжена без даты; проверьте имя файла или metadata источника. "
 
             self._report_progress("extracting_items", 25, item)
             source_ctx_id = item.source_context_id or generate_source_context_id(
@@ -657,6 +664,11 @@ class ProcessingService:
         if llm_data is not None:
             with open(directory / "llm_parsed_response.json", "w", encoding="utf-8") as f:
                 json.dump(llm_data, f, indent=2, ensure_ascii=False)
+
+        date_res = getattr(self, "_last_date_resolution", None)
+        if date_res:
+            with open(directory / "date_resolution_debug.json", "w", encoding="utf-8") as f:
+                json.dump(date_res, f, indent=2, ensure_ascii=False)
 
         prov = create_provenance(protocol, protocol.source_context_id, protocol.protocol_id)
         with open(directory / "protocol_provenance.json", "w", encoding="utf-8") as f:
