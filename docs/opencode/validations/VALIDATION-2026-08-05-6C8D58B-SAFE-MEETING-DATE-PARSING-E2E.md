@@ -1,4 +1,4 @@
-\# VALIDATION-2026-08-05-\<NEW\_HEAD\>-SAFE-MEETING-DATE-PARSING-E2E
+﻿\# VALIDATION-2026-08-05-6c8d58b-SAFE-MEETING-DATE-PARSING-E2E
 
 \#\# 1\. Context
 
@@ -20,13 +20,13 @@ Error reproduced: \`ValueError: month must be in 1..12, not 15\` from \`determin
 Basename: \`31_15_26_10_30_00_video.mp4\`.
 
 Old regex \`_PATTERN_DD_MM_YY_TIME\` matched and extracted groups:  
-day=31, month=15, year=2026 → \`date(2026, 15, 31)\` → ValueError (month 15).
+day=31, month=15, year=2026 в†’ \`date(2026, 15, 31)\` в†’ ValueError (month 15).
 
-For \`2026_07_24_09_14_30_video.mp4\` the old regex captured \`26_07_24_09_14_30\` → day=26, month=07, year=2024 → \`2024-07-26 09:14\` (silently wrong).
+For \`2026_07_24_09_14_30_video.mp4\` the old regex captured \`26_07_24_09_14_30\` в†’ day=26, month=07, year=2024 в†’ \`2024-07-26 09:14\` (silently wrong).
 
 \#\# 3\. New parser contract (meeting\_metadata.py)
 
-\- Four-digit-year formats checked before two-digit-year formats.\- Every pattern uses strict numeric boundaries \`(?<!\d) … (?!\d)\`.\- \`_safe_build_datetime_candidate()\` wraps \`date()\`/\`time()` and returns \`(None, None)\` instead of raising.\- An invalid time candidate is fully rejected (no silent date-only fallback).\n- \`extract_date_from_filename\` always returns \`(date|None, time|None)\` and never raises.\n- No day/month guessing, no replacement with the current date.\n- \`diagnose_date_resolution()\` exposes a safe diagnostics object.
+\- Four-digit-year formats checked before two-digit-year formats.\- Every pattern uses strict numeric boundaries \`(?<!\d) вЂ¦ (?!\d)\`.\- \`_safe_build_datetime_candidate()\` wraps \`date()\`/\`time()` and returns \`(None, None)\` instead of raising.\- An invalid time candidate is fully rejected (no silent date-only fallback).\n- \`extract_date_from_filename\` always returns \`(date|None, time|None)\` and never raises.\n- No day/month guessing, no replacement with the current date.\n- \`diagnose_date_resolution()\` exposes a safe diagnostics object.
 
 \#\# 4\. Regression cases
 
@@ -65,12 +65,12 @@ Offline E2E ran the real standard pipeline on \`31_15_24_10_30_00_video.mp4\` (i
 
 \#\# 8\. Acceptance
 
-1\. \`month must be in 1..12\` no longer occurs — OK.  
-2\. Any filename handled without a raw \`ValueError\` — OK.  
-3\. ISO-with-seconds not parsed as \`DD_MM_YY\` — OK.  
-4\. Invalid filename does not block fallback — OK.  
-5\. Original video filename used — OK.\n6\. Standard generation on the control video completes — OK.  
-7\. Detailed not broken — detailed pipeline tests pass.\n8\. Negative/regression tests added — OK.\n9\. startup-check + E2E done — OK.\n10\. Pushed, PR stays Draft — pending.
+1\. \`month must be in 1..12\` no longer occurs вЂ” OK.  
+2\. Any filename handled without a raw \`ValueError\` вЂ” OK.  
+3\. ISO-with-seconds not parsed as \`DD_MM_YY\` вЂ” OK.  
+4\. Invalid filename does not block fallback вЂ” OK.  
+5\. Original video filename used вЂ” OK.\n6\. Standard generation on the control video completes вЂ” OK.  
+7\. Detailed not broken вЂ” detailed pipeline tests pass.\n8\. Negative/regression tests added вЂ” OK.\n9\. startup-check + E2E done вЂ” OK.\n10\. Pushed, PR stays Draft вЂ” pending.
 
 \#\# 9\. Artifacts
 
